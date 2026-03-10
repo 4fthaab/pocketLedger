@@ -31,8 +31,8 @@
 ### Steps
 1.  **Clone the repository**:
     ```bash
-    git clone [https://github.com/4fthaab/mee-zaan.git](https://github.com/4fthaab/mee-zaan.git)
-    cd mee-zaan
+    git clone "https://github.com/4fthaab/pocketLedger.git"
+    cd pocketLedger
     ```
 
 2.  **Install dependencies**:
@@ -54,12 +54,6 @@
     npx cap sync
     npx cap open android
     ```
-
-## 📸 Screenshots
-
-| Dashboard | Transaction Logs | Excel View |
-| :--- | :--- | :--- |
-| ![Dashboard] | ![Logs] | ![Excel] |
 
 ## 🛡️ Privacy & Security
 Mee-Zaan uses **Firebase's security rules** to ensure that each user can only access their own financial data. By moving to an **Email/Password** system, the app maintains independent session control while providing a secure login environment.
