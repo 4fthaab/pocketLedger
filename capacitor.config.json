@@ -1,0 +1,6 @@
+{
+  "appId": "com.afthab.meezaan",
+  "appName": "Mee-Zaan",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
