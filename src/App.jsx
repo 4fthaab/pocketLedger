@@ -1819,7 +1819,7 @@ export default function PocketLedger() {
           textAlign: "center"
         }}>
 
-          {/* Logo Icon */}
+          {/* Logo Icon
           <div style={{
             width: "80px",
             height: "80px",
@@ -1834,7 +1834,12 @@ export default function PocketLedger() {
             boxShadow: "0 12px 35px rgba(20,184,166,0.45)"
           }}>
             ₹
-          </div>
+          </div> */}
+          <img
+            src="pocketLedger.png"
+            alt="Mee-Zaan Logo"
+            style={{ width: 100, height: 100, borderRadius: 10, objectFit: "cover" }}
+          />
 
           {/* Title */}
           <h1 style={{
@@ -1844,7 +1849,7 @@ export default function PocketLedger() {
             color: "#f1f5f9",
             marginBottom: "8px"
           }}>
-            PocketLedger
+            Mee-Zaan
           </h1>
 
           {/* Subtitle */}
@@ -1971,11 +1976,12 @@ export default function PocketLedger() {
             ☰
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},${COLORS.income})`,
-              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16
-            }}>₹</div>
-            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>PocketLedger</span>
+            <img
+              src="pocketLedger.png"
+              alt="Mee-Zaan Logo"
+              style={{ width: 32, height: 32, borderRadius: 10, objectFit: "cover" }}
+            />
+            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>Mee-Zaan</span>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1996,8 +2002,13 @@ export default function PocketLedger() {
             padding: 24, display: "flex", flexDirection: "column", gap: 4
           }}>
             <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},#2af)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>₹</div>
-              PocketLedger
+              {/* <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},#2af)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>₹</div> */}
+              <img
+                src="pocketLedger.png"
+                alt="Mee-Zaan Logo"
+                style={{ width: 32, height: 32, borderRadius: 10, objectFit: "cover" }}
+              />
+              Mee-Zaan
             </div>
             {DRAWER_ITEMS.map(item => (
               <button key={item.id} onClick={() => { setActiveTab(item.id); setDrawerOpen(false); }}
@@ -2070,7 +2081,7 @@ export default function PocketLedger() {
         </Modal>
       )}
       {confirmDialog && (
-        <ConfirmModal 
+        <ConfirmModal
           title={confirmDialog.title}
           message={confirmDialog.message}
           onConfirm={confirmDialog.onConfirm}
