@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, ResponsiveContainer } from "recharts";
-import { auth, provider } from "./firebase";
+import { auth, provider, db } from "./firebase";
 import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, updateDoc, deleteDoc } from "firebase/firestore";
-import { db } from "./firebase";
+import {
+  doc, setDoc, collection, addDoc, onSnapshot, query,
+  orderBy, serverTimestamp, updateDoc, increment, deleteDoc
+} from "firebase/firestore";
+import * as XLSX from 'xlsx';
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -38,10 +40,7 @@ const getMonthTxns = (transactions, monthKey) => {
     if (!t.date) return false;
 
     const d = t.date instanceof Date ? t.date : new Date(t.date);
-    const key =
-      d.getFullYear() +
-      "-" +
-      String(d.getMonth() + 1).padStart(2, "0");
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
     return key === monthKey;
   });
 };
@@ -76,16 +75,6 @@ function ProgressBar({ value, max, color = COLORS.accent, height = 8 }) {
   return (
     <div style={{ background: COLORS.border, borderRadius: 99, height, overflow: "hidden" }}>
       <div style={{ width: pct + "%", background: c, height: "100%", borderRadius: 99, transition: "width 0.4s" }} />
-    </div>
-  );
-}
-
-function Stat({ label, value, color = COLORS.text, sub }) {
-  return (
-    <div>
-      <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
-      <div style={{ color, fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace" }}>{value}</div>
-      {sub && <div style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -177,19 +166,37 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-// DASHBOARD
-function Dashboard({ transactions, categories, people, goals, liabilities }) {
-  const txns = getMonthTxns(transactions, CUR_MONTH).filter(t => !t.isDeleted);
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function Dashboard({ transactions, categories, people, goals, liabilities, currentMonth, onMonthChange }) {
+  const displayDate = new Date(currentMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" });
+
+  // 1. THIS MONTH'S TRANSACTIONS (Resets to zero initially)
+  const txns = getMonthTxns(transactions, currentMonth).filter(t => !t.isDeleted);
   const income = txns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const expense = txns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const balance = income - expense;
+
+  // 2. CUMULATIVE BALANCE (Carried over from previous months)
+  const cumulativeTxns = transactions.filter(t => !t.isDeleted && t.date.slice(0, 7) <= currentMonth);
+  const totalIncome = cumulativeTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const totalExpense = cumulativeTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const cumulativeBalance = totalIncome - totalExpense;
+
+  // 3. NET WORTH CALCULATIONS
   const toReceive = people.filter(p => p.type === "lend").reduce((s, p) => s + p.balance, 0);
   const iOwe = people.filter(p => p.type === "owe").reduce((s, p) => s + p.balance, 0);
   const liabilityTotal = liabilities.reduce((s, l) => s + (l.totalAmount - l.paidAmount), 0);
-  const goalsSaved = goals.reduce((s, g) => s + g.savedAmount, 0);
-  const netWorth = balance + toReceive - iOwe - liabilityTotal;
+  const netWorth = cumulativeBalance + toReceive - iOwe - liabilityTotal;
 
-  // Pie data
+  const [showFullChartModal, setShowFullChartModal] = useState(false);
+
+  const handleMonthChange = (offset) => {
+    const [year, month] = currentMonth.split("-").map(Number);
+    const date = new Date(year, (month - 1) + offset, 1);
+    const nextYear = date.getFullYear();
+    const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+    onMonthChange(`${nextYear}-${nextMonth}`);
+  };
+
   const catSpend = {};
   txns.filter(t => t.type === "expense").forEach(t => {
     catSpend[t.categoryId] = (catSpend[t.categoryId] || 0) + t.amount;
@@ -205,86 +212,113 @@ function Dashboard({ transactions, categories, people, goals, liabilities }) {
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(today.getDate() - i);
-
     const key = d.toISOString().split("T")[0];
-
     const dayTxns = txns.filter(t => t.date === key);
 
     lineData.push({
       day: key.slice(-2),
-      income: dayTxns
-        .filter(t => t.type === "income")
-        .reduce((s, t) => s + t.amount, 0),
-      expense: dayTxns
-        .filter(t => t.type === "expense")
-        .reduce((s, t) => s + t.amount, 0),
+      income: dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0),
+      expense: dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0),
     });
   }
 
-  // Health meter
+  const fullMonthLineData = [];
+  const [year, month] = currentMonth.split("-").map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate(); // Gets total days in the month
+
+  for (let i = 1; i <= daysInMonth; i++) {
+    const dayString = String(i).padStart(2, '0');
+    const key = `${currentMonth}-${dayString}`;
+    const dayTxns = txns.filter(t => t.date === key);
+
+    fullMonthLineData.push({
+      day: dayString,
+      fullDate: key,
+      income: dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0),
+      expense: dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0),
+    });
+  }
+
   const healthScore = netWorth > 0 ? Math.min(100, (netWorth / 20000) * 100) : 0;
   const healthColor = healthScore > 60 ? COLORS.income : healthScore > 30 ? COLORS.warning : COLORS.expense;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ color: COLORS.textMuted, fontSize: 12 }}>{new Date().toLocaleString("default", { month: "long", year: "numeric" })}</div>
+          <div style={{ color: COLORS.textMuted, fontSize: 12 }}>Financial Overview</div>
           <div style={{ color: COLORS.text, fontWeight: 800, fontSize: 22 }}>Dashboard</div>
         </div>
-        <div style={{ background: COLORS.accentDim, color: COLORS.accent, borderRadius: 99, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
-          📅 This Month
+
+        {/* Navigation UI */}
+        <div style={{ display: "flex", alignItems: "center", background: COLORS.card, borderRadius: 12, border: `1px solid ${COLORS.border}`, padding: "4px" }}>
+          <button
+            onClick={() => handleMonthChange(-1)}
+            style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ←
+          </button>
+          <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 700, padding: "0 8px", minWidth: 110, textAlign: "center" }}>
+            {displayDate}
+          </span>
+          <button
+            onClick={() => handleMonthChange(1)}
+            style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            →
+          </button>
         </div>
       </div>
 
-      {/* Main stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-        <Card>
+      {/* --- TOP ROW: INCOME, EXPENSE, BALANCE --- */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))",
+        gap: 12
+      }}>
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>INCOME</div>
-          <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 20, fontFamily: "'DM Mono',monospace" }}>{fmt(income)}</div>
+          <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(income)}</div>
         </Card>
-        <Card>
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>EXPENSE</div>
-          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 20, fontFamily: "'DM Mono',monospace" }}>{fmt(expense)}</div>
+          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(expense)}</div>
         </Card>
-        <Card>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>BALANCE</div>
-          <div style={{ color: balance >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 20, fontFamily: "'DM Mono',monospace" }}>{fmt(balance)}</div>
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%", border: `1px solid ${COLORS.accent}33` }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TOTAL BALANCE</div>
+          <div style={{ color: cumulativeBalance >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(cumulativeBalance)}
+          </div>
+          <div style={{ color: COLORS.textSub, fontSize: 9, marginTop: 4 }}>Carried over</div>
         </Card>
       </div>
 
-      {/* Dues & Net */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-        <Card>
+      {/* --- SECOND ROW: TO RECEIVE, I OWE, NET WORTH --- */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))",
+        gap: 12
+      }}>
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TO RECEIVE</div>
           <div style={{ color: COLORS.pending, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(toReceive)}</div>
         </Card>
-        <Card>
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>I OWE</div>
           <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(iOwe)}</div>
         </Card>
-        <Card style={{ border: `1px solid ${netWorth >= 0 ? COLORS.income + "44" : COLORS.expense + "44"}` }}>
+        <Card style={{
+          display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%",
+          background: netWorth >= 0 ? `linear-gradient(135deg, ${COLORS.card}, ${COLORS.accent}05)` : COLORS.card,
+          border: `1px solid ${netWorth >= 0 ? COLORS.income + "44" : COLORS.expense + "44"}`
+        }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>NET WORTH</div>
           <div style={{ color: netWorth >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(netWorth)}</div>
         </Card>
       </div>
 
-      {/* Financial Health Meter */}
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontWeight: 700, color: COLORS.text }}>💡 Financial Health</div>
-          <Tag color={healthColor}>{healthScore > 60 ? "Healthy" : healthScore > 30 ? "Fair" : "Critical"}</Tag>
-        </div>
-        <ProgressBar value={healthScore} max={100} color={healthColor} height={10} />
-        <div style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 8 }}>
-          Net Worth = Cash + Receivable − Payable − Liabilities = {fmt(netWorth)}
-        </div>
-      </Card>
 
-      {/* Charts row */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {/* Pie */}
         <Card>
           <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🍕 By Category</div>
           {pieData.length > 0 ? (
@@ -309,8 +343,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities }) {
           ) : <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: "40px 0" }}>No expenses yet</div>}
         </Card>
 
-        {/* Line */}
-        <Card>
+        <Card onClick={() => setShowFullChartModal(true)}>
           <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>📈 Daily Cash Flow</div>
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={lineData}>
@@ -324,7 +357,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities }) {
         </Card>
       </div>
 
-      {/* Goals quick view */}
       <Card>
         <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🎯 Saving Goals</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -341,35 +373,130 @@ function Dashboard({ transactions, categories, people, goals, liabilities }) {
           ))}
         </div>
       </Card>
+      {/* ADD THIS MODAL AT THE END OF THE DASHBOARD RETURN */}
+      {showFullChartModal && (
+        <Modal title={`Cash Flow: ${displayDate}`} onClose={() => setShowFullChartModal(false)}>
+
+          <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: COLORS.textMuted }}>
+              <span style={{ color: COLORS.income, fontWeight: 800 }}>●</span> Income
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.textMuted }}>
+              <span style={{ color: COLORS.expense, fontWeight: 800 }}>●</span> Expense
+            </div>
+          </div>
+
+          {/* Scrollable Container */}
+          <div style={{
+            width: "100%",
+            overflowX: "auto",
+            overflowY: "hidden",
+            paddingBottom: 10
+          }}>
+            {/* The inner div is forced to be wider than the screen to create scrolling */}
+            <div style={{ width: Math.max(600, daysInMonth * 35), height: 300 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fullMonthLineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={50} tickFormatter={v => v > 0 ? "₹" + v / 1000 + "k" : ""} />
+
+                  {/* Tooltip uses fullDate so you know exactly what day you are hovering */}
+                  <Tooltip
+                    labelFormatter={(label, payload) => payload?.[0]?.payload?.fullDate || label}
+                    formatter={v => fmt(v)}
+                    contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }}
+                  />
+
+                  <Line type="monotone" dataKey="income" stroke={COLORS.income} strokeWidth={2} dot={{ r: 3, fill: COLORS.income }} activeDot={{ r: 6 }} />
+                  <Line type="monotone" dataKey="expense" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 3, fill: COLORS.expense }} activeDot={{ r: 6 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
-// ADD TRANSACTION
-function AddTransaction({ categories, people, onAdd, onClose, editTxn }) {
+// ─── ADD TRANSACTION ──────────────────────────────────────────────────────────
+function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editTxn, accounts }) {
   const [type, setType] = useState(editTxn?.type || "expense");
   const [amount, setAmount] = useState(editTxn?.amount?.toString() || "");
   const [categoryId, setCategoryId] = useState(editTxn?.categoryId || categories[0]?.id || "");
   const [note, setNote] = useState(editTxn?.note || "");
-  const [date, setDate] = useState(editTxn?.date || "2026-02-23");
+  const [date, setDate] = useState(editTxn?.date || new Date().toISOString().split("T")[0]);
   const [spendType, setSpendType] = useState(editTxn?.spendType || "self");
   const [personId, setPersonId] = useState(editTxn?.personId || "");
+  const [newPersonName, setNewPersonName] = useState("");
   const [isRecurring, setIsRecurring] = useState(editTxn?.isRecurring || false);
 
-  const filteredCats = categories.filter(c => type === "income" ? ["salary"].includes(c.id) || c.name.toLowerCase().includes("income") : !["salary"].includes(c.id));
+  // Account States
+  const [accountId, setAccountId] = useState(editTxn?.accountId || accounts[0]?.id || "");
+  const [toAccountId, setToAccountId] = useState(accounts[1]?.id || accounts[0]?.id || "");
+
   const allCats = categories;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!amount || isNaN(+amount)) return;
+
+    // --- TRANSFER LOGIC ---
+    if (type === "transfer") {
+      if (accountId === toAccountId) return;
+
+      const fromAcc = accounts.find(a => a.id === accountId);
+      const toAcc = accounts.find(a => a.id === toAccountId);
+
+      // 1. Out Transaction (Expense from source) - RECORDED FIRST
+      await onAdd({
+        type: "expense",
+        amount: +amount,
+        categoryId,
+        accountId: accountId,
+        note: note ? `Transfer to ${toAcc?.name} (${note})` : `Transfer to ${toAcc?.name}`,
+        date,
+        spendType: "self",
+        personId: null,
+        isRecurring: false,
+      });
+
+      // ⏳ Force a 500ms delay so Firebase timestamps them sequentially
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 2. In Transaction (Income to destination) - RECORDED SECOND
+      await onAdd({
+        type: "income",
+        amount: +amount,
+        categoryId,
+        accountId: toAccountId,
+        note: note ? `Transfer from ${fromAcc?.name} (${note})` : `Transfer from ${fromAcc?.name}`,
+        date,
+        spendType: "self",
+        personId: null,
+        isRecurring: false,
+      });
+
+      onClose?.();
+      return;
+    }
+
+    // --- NORMAL EXPENSE/INCOME LOGIC ---
+    let finalPersonId = personId;
+
+    if (spendType === "other" && personId === "NEW" && newPersonName) {
+      finalPersonId = await onAddPerson({ name: newPersonName, balance: 0, type: "lend" });
+    }
+
     onAdd({
       ...(editTxn?.id && { id: editTxn.id }),
       type,
       amount: +amount,
       categoryId,
+      accountId,
       note,
       date,
       spendType,
-      personId: spendType === "other" ? personId : null,
+      personId: spendType === "other" ? finalPersonId : null,
       isRecurring,
     });
     onClose?.();
@@ -377,13 +504,82 @@ function AddTransaction({ categories, people, onAdd, onClose, editTxn }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <Toggle value={type} onChange={setType} options={[
-        { value: "expense", label: "💸 Expense", color: COLORS.expense },
-        { value: "income", label: "💰 Income", color: COLORS.income }
-      ]} />
+      {/* Type Toggle */}
+      <Toggle value={type} onChange={setType} options={
+        editTxn ? [
+          { value: "expense", label: "💸 Expense", color: COLORS.expense },
+          { value: "income", label: "💰 Income", color: COLORS.income }
+        ] : [
+          { value: "expense", label: "💸 Expense", color: COLORS.expense },
+          { value: "income", label: "💰 Income", color: COLORS.income },
+          { value: "transfer", label: "🔄 Transfer", color: COLORS.pending }
+        ]
+      } />
 
       <Input label="Amount (₹)" value={amount} onChange={setAmount} type="number" placeholder="0" />
 
+      {/* ACCOUNT SELECTION UI */}
+      {type === "transfer" ? (
+        <>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>From Account (Out)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {accounts.map(acc => (
+                <button key={acc.id} onClick={() => setAccountId(acc.id)}
+                  style={{
+                    background: accountId === acc.id ? acc.color + "33" : COLORS.bg,
+                    border: accountId === acc.id ? `1.5px solid ${acc.color}` : `1px solid ${COLORS.border}`,
+                    borderRadius: 10, padding: "6px 12px", color: accountId === acc.id ? acc.color : COLORS.textMuted,
+                    fontSize: 12, cursor: "pointer", fontWeight: 600, transition: "all 0.15s"
+                  }}
+                >{acc.icon} {acc.name}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>To Account (In)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {accounts.map(acc => {
+                const isFromAccount = acc.id === accountId;
+                return (
+                  <button key={acc.id}
+                    onClick={() => !isFromAccount && setToAccountId(acc.id)}
+                    disabled={isFromAccount}
+                    style={{
+                      background: toAccountId === acc.id ? acc.color + "33" : COLORS.bg,
+                      border: toAccountId === acc.id ? `1.5px solid ${acc.color}` : `1px solid ${COLORS.border}`,
+                      borderRadius: 10, padding: "6px 12px",
+                      color: toAccountId === acc.id ? acc.color : COLORS.textMuted,
+                      fontSize: 12, fontWeight: 600, transition: "all 0.15s",
+                      opacity: isFromAccount ? 0.3 : 1,
+                      cursor: isFromAccount ? "not-allowed" : "pointer",
+                      filter: isFromAccount ? "grayscale(1)" : "none"
+                    }}
+                  >{acc.icon} {acc.name}</button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Account / Bank</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {accounts.map(acc => (
+              <button key={acc.id} onClick={() => setAccountId(acc.id)}
+                style={{
+                  background: accountId === acc.id ? acc.color + "33" : COLORS.bg,
+                  border: accountId === acc.id ? `1.5px solid ${acc.color}` : `1px solid ${COLORS.border}`,
+                  borderRadius: 10, padding: "6px 12px", color: accountId === acc.id ? acc.color : COLORS.textMuted,
+                  fontSize: 12, cursor: "pointer", fontWeight: 600, transition: "all 0.15s"
+                }}
+              >{acc.icon} {acc.name}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Category Selection */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Category</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -400,37 +596,65 @@ function AddTransaction({ categories, people, onAdd, onClose, editTxn }) {
         </div>
       </div>
 
-      <Toggle value={spendType} onChange={setSpendType} options={[
-        { value: "self", label: "👤 Myself" },
-        { value: "other", label: "👥 For Someone" }
-      ]} />
+      {/* Spend Type Logic */}
+      {type !== "transfer" && (
+        <>
+          <Toggle value={spendType} onChange={setSpendType} options={[
+            { value: "self", label: "👤 Myself" },
+            { value: "other", label: "👥 For Someone" }
+          ]} />
 
-      {spendType === "other" && (
-        <Select label="Person" value={personId} onChange={setPersonId}
-          options={[{ value: "", label: "Select person..." }, ...people.map(p => ({ value: p.id, label: p.name }))]}
-        />
+          {spendType === "other" && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Person</div>
+              <select
+                value={personId}
+                onChange={e => setPersonId(e.target.value)}
+                style={{
+                  width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+                  fontSize: 14, outline: "none", marginBottom: personId === "NEW" ? 8 : 0
+                }}
+              >
+                <option value="">Select person...</option>
+                {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                <option value="NEW">+ Add New Person</option>
+              </select>
+
+              {personId === "NEW" && (
+                <Input
+                  placeholder="Enter their name..."
+                  value={newPersonName}
+                  onChange={setNewPersonName}
+                />
+              )}
+            </div>
+          )}
+        </>
       )}
 
       <Input label="Note" value={note} onChange={setNote} placeholder="Optional note..." />
       <Input label="Date" value={date} onChange={setDate} type="date" />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <button onClick={() => setIsRecurring(v => !v)}
-          style={{ width: 36, height: 20, borderRadius: 10, background: isRecurring ? COLORS.accent : COLORS.border, border: "none", cursor: "pointer", transition: "background 0.15s", position: "relative" }}>
-          <div style={{ position: "absolute", top: 2, left: isRecurring ? 18 : 2, width: 16, height: 16, borderRadius: 8, background: "#fff", transition: "left 0.15s" }} />
-        </button>
-        <span style={{ color: COLORS.textSub, fontSize: 13 }}>Recurring expense</span>
-      </div>
+      {/* Recurring Option */}
+      {type !== "transfer" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button onClick={() => setIsRecurring(v => !v)}
+            style={{ width: 36, height: 20, borderRadius: 10, background: isRecurring ? COLORS.accent : COLORS.border, border: "none", cursor: "pointer", transition: "background 0.15s", position: "relative" }}>
+            <div style={{ position: "absolute", top: 2, left: isRecurring ? 18 : 2, width: 16, height: 16, borderRadius: 8, background: "#fff", transition: "left 0.15s" }} />
+          </button>
+          <span style={{ color: COLORS.textSub, fontSize: 13 }}>Recurring expense</span>
+        </div>
+      )}
 
       <Btn onClick={handleSubmit} style={{ width: "100%", padding: "12px 0" }}>
-        {editTxn ? "💾 Update Transaction" : "➕ Add Transaction"}
+        {editTxn ? "💾 Update Transaction" : (type === "transfer" ? "🔄 Add Transfer" : "➕ Add Transaction")}
       </Btn>
     </div>
   );
 }
-
-// TRANSACTIONS
-function Transactions({ transactions, categories, people, onDelete, onEdit, onRestore }) {
+// ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
+function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -438,24 +662,58 @@ function Transactions({ transactions, categories, people, onDelete, onEdit, onRe
 
   const filtered = useMemo(() => {
     return transactions.filter(t => {
+      // 1. Month Filter (Only show transactions matching currentMonth)
+      if (t.date) {
+        const tMonth = t.date.slice(0, 7); // Extracts "YYYY-MM"
+        if (tMonth !== currentMonth) return false;
+      }
+
+      // 2. Trash Filter
       if (showDeleted ? !t.isDeleted : t.isDeleted) return false;
+
+      // 3. Type Filter
       if (filterType !== "all" && t.type !== filterType) return false;
+
+      // 4. Category Filter
       if (filterCat !== "all" && t.categoryId !== filterCat) return false;
+
+      // 5. Search Filter
       const cat = categories.find(c => c.id === t.categoryId);
       const person = t.personId ? people.find(p => p.id === t.personId) : null;
-      const searchStr = `${t.note} ${cat?.name || ""} ${person?.name || ""}`.toLowerCase();
+      const acc = accounts?.find(a => a.id === t.accountId); // Fixed: accountID -> accountId
+
+      // Added acc?.name so you can search by Bank name too!
+      const searchStr = `${t.note} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
       if (search && !searchStr.includes(search.toLowerCase())) return false;
+
       return true;
-    }).sort((a, b) => new Date(b.date) - new Date(a.date))
-  }, [transactions, search, filterType, filterCat, showDeleted, categories, people]);
+    }).sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+
+      // Primary Sort: By Date (Newest first)
+      if (dateB > dateA) return 1;
+      if (dateB < dateA) return -1;
+
+      // Secondary Sort: By order of creation (Newest first)
+      // This ensures items added on the same day stay in exact chronological order
+      const timeA = a.createdAt?.seconds || 0;
+      const timeB = b.createdAt?.seconds || 0;
+      return timeB - timeA;
+    });
+  }, [transactions, search, filterType, filterCat, showDeleted, categories, people, accounts, currentMonth]); // Added accounts to dependencies
 
   return (
     <div>
-      <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text, marginBottom: 16 }}>📋 Transactions</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>📋 Transactions</div>
+        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
+          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
+        </div>
+      </div>
 
-      {/* Search & filters */}
       <Card style={{ marginBottom: 16 }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search..."
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search (e.g., Food, Federal Bank)..."
           style={{ width: "100%", boxSizing: "border-box", background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 14px", color: COLORS.text, fontSize: 13, outline: "none", marginBottom: 10 }} />
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {["all", "income", "expense"].map(v => (
@@ -479,7 +737,6 @@ function Transactions({ transactions, categories, people, onDelete, onEdit, onRe
         </div>
       </Card>
 
-      {/* List */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {filtered.length === 0 && (
           <div style={{ textAlign: "center", color: COLORS.textMuted, padding: "40px 0", fontSize: 14 }}>No transactions found</div>
@@ -487,6 +744,8 @@ function Transactions({ transactions, categories, people, onDelete, onEdit, onRe
         {filtered.map(t => {
           const cat = categories.find(c => c.id === t.categoryId);
           const person = t.personId ? people.find(p => p.id === t.personId) : null;
+          const acc = accounts?.find(a => a.id === t.accountId);
+
           return (
             <Card key={t.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", opacity: t.isDeleted ? 0.5 : 1 }}>
               <div style={{ fontSize: 26 }}>{cat?.icon || "💳"}</div>
@@ -494,6 +753,7 @@ function Transactions({ transactions, categories, people, onDelete, onEdit, onRe
                 <div style={{ color: COLORS.text, fontWeight: 600, fontSize: 14 }}>{t.note || cat?.name || "—"}</div>
                 <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                   <Tag color={cat?.color || COLORS.accent}>{cat?.name || "—"}</Tag>
+                  {acc && <Tag color={acc.color || COLORS.textMuted}>{acc.icon} {acc.name}</Tag>}
                   {person && <Tag color={COLORS.pending}>👤 {person.name}</Tag>}
                   <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{t.date}</span>
                   {t.isRecurring && <Tag color={COLORS.textMuted}>🔁 Recurring</Tag>}
@@ -524,7 +784,7 @@ function Transactions({ transactions, categories, people, onDelete, onEdit, onRe
   );
 }
 
-// DUES
+// ─── DUES ─────────────────────────────────────────────────────────────────────
 function Dues({ people, onMarkPaid, onAddPerson }) {
   const lend = people.filter(p => p.type === "lend" && p.balance > 0);
   const owe = people.filter(p => p.type === "owe" && p.balance > 0);
@@ -535,7 +795,7 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
 
   const handleAdd = () => {
     if (!name || !amount) return;
-    onAddPerson({ id: uid(), name, balance: +amount, type: dueType });
+    onAddPerson({ name, balance: +amount, type: dueType });
     setName(""); setAmount(""); setShowAdd(false);
   };
 
@@ -567,23 +827,8 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>🤝 Dues</div>
-        <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn>
+        {/* <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn> */}
       </div>
-
-      {showAdd && (
-        <Card style={{ marginBottom: 16 }}>
-          <Toggle value={dueType} onChange={setDueType} options={[
-            { value: "lend", label: "💰 They owe me", color: COLORS.income },
-            { value: "owe", label: "💸 I owe them", color: COLORS.expense }
-          ]} />
-          <Input label="Person Name" value={name} onChange={setName} placeholder="Enter name" />
-          <Input label="Amount" value={amount} onChange={setAmount} type="number" placeholder="₹0" />
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAdd} style={{ flex: 1 }}>Add</Btn>
-            <Btn onClick={() => setShowAdd(false)} outline style={{ flex: 1 }}>Cancel</Btn>
-          </div>
-        </Card>
-      )}
 
       <div style={{ marginBottom: 8, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
         💰 Money To Receive — {fmt(lend.reduce((s, p) => s + p.balance, 0))} total
@@ -604,153 +849,218 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
   );
 }
 
-// BUDGET PLANNER
-function BudgetPlanner({ budgets, categories, transactions, onSave }) {
-  const [editing, setEditing] = useState(false);
-  const [local, setLocal] = useState(budgets);
-  const txns = getMonthTxns(transactions, CUR_MONTH).filter(t => t.type === "expense");
+// ─── BALANCES (REPLACES BUDGET) ────────────────────────────────────────────────
+function BalancesScreen({ accounts, transactions, currentMonth }) {
 
-  const getSpent = (catId) => txns.filter(t => t.categoryId === catId).reduce((s, t) => s + t.amount, 0);
+  // Calculate cumulative balance up to the end of the currently selected month
+  const getAccountBalance = (accountId) => {
+    const validTxns = transactions.filter(t => {
+      if (t.isDeleted) return false;
+      const tMonth = t.date.slice(0, 7); // "YYYY-MM"
+      return tMonth <= currentMonth;     // Only include transactions up to selected month
+    });
 
-  const handleSave = () => { onSave(local); setEditing(false); };
+    const accTxns = validTxns.filter(t => t.accountId === accountId);
+    const income = accTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+    const expense = accTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
 
-  const weeklyData = [
-    { week: "W1", amount: 0 },
-    { week: "W2", amount: 0 },
-    { week: "W3", amount: 0 },
-    { week: "W4", amount: 0 },
-  ];
+    return income - expense;
+  };
 
-  txns.forEach(t => {
-    if (!t.date) return;
-
-    const day = new Date(t.date).getDate();
-
-    if (day <= 7) weeklyData[0].amount += t.amount;
-    else if (day <= 14) weeklyData[1].amount += t.amount;
-    else if (day <= 21) weeklyData[2].amount += t.amount;
-    else weeklyData[3].amount += t.amount;
-  });
+  const totalLiquidity = accounts.reduce((sum, acc) => sum + getAccountBalance(acc.id), 0);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>📊 Budget Planner</div>
-        <Btn onClick={() => editing ? handleSave() : setEditing(true)} style={{ padding: "8px 16px", fontSize: 12 }}>
-          {editing ? "💾 Save" : "✏️ Edit"}
-        </Btn>
+        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>💳 Accounts & Balances</div>
+        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
+          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
+        </div>
       </div>
 
+      <Card style={{ marginBottom: 20, textAlign: "center", padding: "24px 20px" }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Total Liquid Funds</div>
+        <div style={{ color: totalLiquidity >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 32, fontFamily: "'DM Mono',monospace" }}>
+          {fmt(totalLiquidity)}
+        </div>
+        <div style={{ color: COLORS.textSub, fontSize: 12, marginTop: 8 }}>
+          Cumulative balance up to end of {new Date(currentMonth + "-01").toLocaleString("default", { month: "long" })}
+        </div>
+      </Card>
+
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {local.map((b, i) => {
-          const cat = categories.find(c => c.id === b.categoryId);
-          const spent = getSpent(b.categoryId);
-          const pct = b.limit ? (spent / b.limit) * 100 : 0;
-          const warn = pct >= 80;
+        {accounts.map(acc => {
+          const balance = getAccountBalance(acc.id);
           return (
-            <Card key={b.categoryId}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 20 }}>{cat?.icon || "💳"}</span>
-                  <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 14 }}>{cat?.name || b.categoryId}</span>
-                  {warn && <Tag color={COLORS.warning}>⚠️ {Math.round(pct)}%</Tag>}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {editing ? (
-                    <input type="number" value={b.limit} onChange={e => {
-                      const updated = [...local]; updated[i] = { ...b, limit: +e.target.value }; setLocal(updated);
-                    }}
-                      style={{ width: 80, background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "4px 8px", color: COLORS.text, fontSize: 13, outline: "none" }} />
-                  ) : (
-                    <span style={{ color: COLORS.textMuted, fontSize: 12, fontFamily: "'DM Mono',monospace" }}>{fmt(b.limit)}</span>
-                  )}
-                </div>
+            <Card key={acc.id} style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <div style={{
+                width: 48, height: 48, borderRadius: 14, background: acc.color + "22",
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24
+              }}>
+                {acc.icon}
               </div>
-              <ProgressBar value={spent} max={b.limit} color={warn ? COLORS.warning : cat?.color || COLORS.accent} />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-                <span style={{ color: warn ? COLORS.warning : COLORS.textMuted, fontSize: 11 }}>Spent: {fmt(spent)}</span>
-                <span style={{ color: COLORS.accent, fontSize: 11 }}>Left: {fmt(Math.max(0, b.limit - spent))}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 16 }}>{acc.name}</div>
+                <div style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 2 }}>{acc.id === "cash" ? "Physical wallet" : "Bank account"}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: balance >= 0 ? COLORS.text : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+                  {fmt(balance)}
+                </div>
               </div>
             </Card>
           );
         })}
       </div>
-
-      {/* Weekly bar chart */}
-      <Card style={{ marginTop: 16 }}>
-        <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>📅 Weekly Spending</div>
-        <ResponsiveContainer width="100%" height={180}>
-          <BarChart data={weeklyData}>
-            <XAxis dataKey="week" tick={{ fill: COLORS.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={50} tickFormatter={v => "₹" + v} />
-            <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} />
-            <Bar dataKey="amount" fill={COLORS.expense} radius={[6, 6, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
     </div>
   );
 }
 
-// GOALS & LIABILITIES
-function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal }) {
+// ─── GOALS & LIABILITIES (UPDATED) ───────────────────────────────────────────
+function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal, onDeleteGoal, onAddLiability, onUpdateLiability, onDeleteLiability }) {
   const [showAddGoal, setShowAddGoal] = useState(false);
+  const [showAddLiab, setShowAddLiab] = useState(false);
+  const [editingItem, setEditingItem] = useState(null); // Tracks if we are editing
+
+  // Goal Form State
   const [gName, setGName] = useState("");
   const [gTarget, setGTarget] = useState("");
   const [gIcon, setGIcon] = useState("🎯");
   const [addSavings, setAddSavings] = useState({});
 
+  // Liability Form State
+  const [lName, setLName] = useState("");
+  const [lTotal, setLTotal] = useState("");
+  const [lPaid, setLPaid] = useState("");
+  const [lDue, setLDue] = useState("");
+  const [lEmi, setLEmi] = useState("");
+
+  useEffect(() => {
+    if (lTotal && lDue) {
+      const remaining = (+lTotal) - (+lPaid || 0);
+      const today = new Date();
+      const dueDate = new Date(lDue);
+
+      // Calculate month difference
+      const months = (dueDate.getFullYear() - today.getFullYear()) * 12 + (dueDate.getMonth() - today.getMonth());
+
+      if (months > 0) {
+        setLEmi(Math.round(remaining / months));
+      } else {
+        setLEmi(remaining); // Due this month or overdue
+      }
+    }
+  }, [lTotal, lPaid, lDue]);
+
   const handleAddGoal = () => {
-    if (!gName || !gTarget) return;
-    onAddGoal({ id: uid(), name: gName, targetAmount: +gTarget, savedAmount: 0, icon: gIcon, color: PIE_COLORS[goals.length % PIE_COLORS.length] });
-    setGName(""); setGTarget(""); setShowAddGoal(false);
+    if (!gName.trim() || !gTarget || gTarget <= 0) {
+      alert("Please enter a valid name and target amount.");
+      return;
+    }
+    onAddGoal({
+      id: editingItem?.id || uid(),
+      name: gName,
+      targetAmount: +gTarget,
+      savedAmount: editingItem?.savedAmount || 0,
+      icon: gIcon,
+      color: PIE_COLORS[goals.length % PIE_COLORS.length]
+    });
+    resetGoalForm();
+  };
+
+  const handleAddLiability = () => {
+    if (!lName.trim() || !lTotal || lTotal <= 0) {
+      alert("Please enter a valid name and total amount.");
+      return;
+    }
+    onAddLiability({
+      id: editingItem?.id || uid(),
+      name: lName,
+      totalAmount: +lTotal,
+      paidAmount: +lPaid || 0,
+      dueDate: lDue || "N/A",
+      emi: +lEmi || 0
+    });
+    resetLiabForm();
+  };
+
+  const resetGoalForm = () => {
+    setGName(""); setGTarget(""); setGIcon("🎯"); setShowAddGoal(false); setEditingItem(null);
+  };
+
+  const resetLiabForm = () => {
+    setLName(""); setLTotal(""); setLPaid(""); setLDue(""); setLEmi(""); setShowAddLiab(false); setEditingItem(null);
+  };
+
+  const startEditGoal = (g) => {
+    setEditingItem(g); setGName(g.name); setGTarget(g.targetAmount); setGIcon(g.icon); setShowAddGoal(true);
+  };
+
+  const startEditLiab = (l) => {
+    setEditingItem(l); setLName(l.name); setLTotal(l.totalAmount); setLPaid(l.paidAmount); setLDue(l.dueDate); setLEmi(l.emi); setShowAddLiab(true);
   };
 
   return (
     <div>
       <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text, marginBottom: 16 }}>🎯 Goals & Liabilities</div>
 
-      {/* Goals */}
+      {/* --- SAVING GOALS SECTION --- */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Saving Goals</div>
-        <Btn onClick={() => setShowAddGoal(v => !v)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Goal</Btn>
+        <Btn onClick={() => setShowAddGoal(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Goal</Btn>
       </div>
 
       {showAddGoal && (
-        <Card style={{ marginBottom: 12 }}>
-          <Input label="Goal Name" value={gName} onChange={setGName} placeholder="e.g. Emergency Fund" />
-          <Input label="Target Amount" value={gTarget} onChange={setGTarget} type="number" placeholder="₹0" />
+        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.accent}44` }}>
+          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.accent }}>{editingItem ? "Edit Goal" : "New Saving Goal"}</div>
+          <Input label="Goal Name *" value={gName} onChange={setGName} placeholder="e.g. New Car" />
+          <Input label="Target Amount (₹) *" value={gTarget} onChange={setGTarget} type="number" placeholder="0" />
           <Input label="Icon (emoji)" value={gIcon} onChange={setGIcon} placeholder="🎯" />
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAddGoal} style={{ flex: 1 }}>Add Goal</Btn>
-            <Btn onClick={() => setShowAddGoal(false)} outline style={{ flex: 1 }}>Cancel</Btn>
+            <Btn onClick={handleAddGoal} style={{ flex: 1 }}>{editingItem ? "Update" : "Add Goal"}</Btn>
+            <Btn onClick={resetGoalForm} outline style={{ flex: 1 }}>Cancel</Btn>
           </div>
         </Card>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
         {goals.map(g => (
           <Card key={g.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 22 }}>{g.icon}</span>
                 <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{g.name}</span>
               </div>
-              <Tag color={g.color}>{Math.round((g.savedAmount / g.targetAmount) * 100)}%</Tag>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => startEditGoal(g)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
+                <button onClick={() => onDeleteGoal(g.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+              </div>
             </div>
+
             <ProgressBar value={g.savedAmount} max={g.targetAmount} color={g.color} height={10} />
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, alignItems: "center" }}>
-              <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{fmt(g.savedAmount)} of {fmt(g.targetAmount)}</span>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="number" placeholder="+ add" value={addSavings[g.id] || ""}
+
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <span style={{ color: COLORS.textMuted, fontSize: 12 }}>{fmt(g.savedAmount)} / {fmt(g.targetAmount)} ({Math.round((g.savedAmount / g.targetAmount) * 100)}%)</span>
+
+              {/* LARGER ADD MONEY UI */}
+              <div style={{ display: "flex", gap: 6, flex: "1 1 150px", justifyContent: "flex-end" }}>
+                <input
+                  type="number"
+                  placeholder="+ amount"
+                  value={addSavings[g.id] || ""}
                   onChange={e => setAddSavings(s => ({ ...s, [g.id]: e.target.value }))}
-                  style={{ width: 70, background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "4px 8px", color: COLORS.text, fontSize: 12, outline: "none" }} />
-                <button onClick={() => {
-                  if (!addSavings[g.id]) return;
-                  onUpdateGoal(g.id, Math.min(g.targetAmount, g.savedAmount + +addSavings[g.id]));
-                  setAddSavings(s => ({ ...s, [g.id]: "" }));
-                }}
-                  style={{ background: COLORS.accentDim, border: "none", borderRadius: 8, padding: "4px 10px", color: COLORS.accent, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                  style={{
+                    flex: 1, maxWidth: 100, background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                    borderRadius: 10, padding: "8px 12px", color: COLORS.text, fontSize: 14, outline: "none"
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    if (!addSavings[g.id]) return;
+                    onUpdateGoal(g.id, Math.min(g.targetAmount, g.savedAmount + +addSavings[g.id]));
+                    setAddSavings(s => ({ ...s, [g.id]: "" }));
+                  }}
+                  style={{ background: COLORS.accent, border: "none", borderRadius: 10, padding: "8px 16px", color: "#000", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
                   Add
                 </button>
               </div>
@@ -759,23 +1069,73 @@ function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal }) {
         ))}
       </div>
 
-      {/* Liabilities */}
-      <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-        Liabilities
+      {/* --- LIABILITIES SECTION --- */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Liabilities (Loans/EMI)</div>
+        <Btn onClick={() => setShowAddLiab(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Debt</Btn>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+
+      {showAddLiab && (
+        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.expense}44` }}>
+          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.expense }}>
+            {editingItem ? "Edit Liability" : "New Liability"}
+          </div>
+          <Input label="Lender Name *" value={lName} onChange={setLName} placeholder="e.g. Home Loan" />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Input label="Total Amount *" value={lTotal} onChange={setLTotal} type="number" placeholder="0" />
+            <Input label="Already Paid" value={lPaid} onChange={setLPaid} type="number" placeholder="0" />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Input label="Final Due Date *" value={lDue} onChange={setLDue} type="date" />
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>
+                Auto-calculated EMI
+              </div>
+              <div style={{
+                background: COLORS.bg, padding: "10px 14px", borderRadius: 10,
+                color: COLORS.accent, fontWeight: 700, border: `1px solid ${COLORS.border}`
+              }}>
+                {fmt(lEmi)}/mo
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={handleAddLiability} color={COLORS.expense} style={{ flex: 1, color: "#fff" }}>
+              {editingItem ? "Update Liability" : "Add Liability"}
+            </Btn>
+            <Btn onClick={resetLiabForm} outline style={{ flex: 1 }}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {liabilities.map(l => (
           <Card key={l.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>🏦 {l.name}</div>
-              <Tag color={COLORS.expense}>Due {l.dueDate}</Tag>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Tag color={COLORS.expense}>Due: {l.dueDate}</Tag>
+                <button onClick={() => startEditLiab(l)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
+                <button onClick={() => onDeleteLiability(l.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+              </div>
             </div>
+
             <ProgressBar value={l.paidAmount} max={l.totalAmount} color={COLORS.warning} height={10} />
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-              <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Paid: {fmt(l.paidAmount)}</span>
-              <span style={{ color: COLORS.expense, fontSize: 11 }}>Remaining: {fmt(l.totalAmount - l.paidAmount)}</span>
+
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
+              <span style={{ color: COLORS.textMuted }}>Paid: {fmt(l.paidAmount)}</span>
+              <span style={{ color: COLORS.expense, fontWeight: 700 }}>Rem: {fmt(l.totalAmount - l.paidAmount)}</span>
             </div>
-            {l.emi && <div style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 4 }}>EMI: {fmt(l.emi)}/month</div>}
+
+            {l.emi > 0 && (
+              <div style={{ marginTop: 8, padding: "8px 12px", background: COLORS.bg, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Monthly EMI:</span>
+                <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{fmt(l.emi)}</span>
+              </div>
+            )}
           </Card>
         ))}
       </div>
@@ -783,7 +1143,36 @@ function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal }) {
   );
 }
 
-// CATEGORIES
+// ─── CONFIRM MODAL ────────────────────────────────────────────────────────────
+function ConfirmModal({ title, message, onConfirm, onCancel }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)"
+    }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: COLORS.card, borderRadius: 28, border: `1px solid ${COLORS.border}`,
+        padding: "32px 24px", width: "100%", maxWidth: 340, textAlign: "center",
+        boxShadow: "0 24px 48px rgba(0,0,0,0.6)"
+      }}>
+        <div style={{
+          width: 64, height: 64, borderRadius: 20, background: COLORS.expenseDim,
+          color: COLORS.expense, display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 32, margin: "0 auto 20px"
+        }}>⚠️</div>
+        <div style={{ fontWeight: 800, fontSize: 20, color: COLORS.text, marginBottom: 8 }}>{title}</div>
+        <div style={{ color: COLORS.textMuted, fontSize: 14, marginBottom: 28, lineHeight: "1.5" }}>{message}</div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <Btn onClick={onConfirm} style={{ flex: 1, background: COLORS.expense, color: "#fff" }}>Delete</Btn>
+          <Btn onClick={onCancel} outline style={{ flex: 1, color: COLORS.textMuted, border: `1px solid ${COLORS.border}` }}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CATEGORIES ───────────────────────────────────────────────────────────────
 function CategoriesScreen({ categories, onAdd, onDelete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
@@ -841,10 +1230,229 @@ function CategoriesScreen({ categories, onAdd, onDelete }) {
   );
 }
 
+// ─── SHEET EXPORT SCREEN ──────────────────────────────────────────────────────
+function SheetScreen({ transactions, categories, accounts, currentMonth, onMonthChange }) {
+
+  const displayDate = new Date(currentMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" });
+
+  const handleMonthChange = (offset) => {
+    const [year, month] = currentMonth.split("-").map(Number);
+    const date = new Date(year, (month - 1) + offset, 1);
+    const nextYear = date.getFullYear();
+    const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+    onMonthChange(`${nextYear}-${nextMonth}`);
+  };
+
+  // 1. Build Data Structure (Opening Balances + Sorted Transactions)
+  const ledgerData = useMemo(() => {
+
+    // Step A: Sort transactions by Date, then by the exact time they were added
+    const sortedTxns = [...transactions]
+      .filter(t => !t.isDeleted)
+      .sort((a, b) => {
+        const dateA = new Date(a.date);
+        const dateB = new Date(b.date);
+
+        // 1. Primary Sort: By the user-selected Date
+        if (dateA < dateB) return -1;
+        if (dateA > dateB) return 1;
+
+        // 2. Secondary Sort: By order of creation (the actual time you added it)
+        // This ensures your Federal -> SBI transfer stays in the order you typed it.
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeA - timeB;
+      });
+
+    // Step B: Calculate Opening Balances (Historical carryover)
+    let prevAccounts = {};
+    accounts.forEach(a => prevAccounts[a.id] = 0);
+    const currentMonthTxns = [];
+
+    sortedTxns.forEach(t => {
+      const tMonth = t.date.slice(0, 7);
+      if (tMonth < currentMonth) {
+        if (t.type === "income" && t.accountId) prevAccounts[t.accountId] += t.amount;
+        if (t.type === "expense" && t.accountId) prevAccounts[t.accountId] -= t.amount;
+      } else if (tMonth === currentMonth) {
+        currentMonthTxns.push(t);
+      }
+    });
+
+    // Step C: Build the Month Display
+    const displayData = [];
+    let runTotal = 0;
+    let runAccounts = {};
+    accounts.forEach(a => runAccounts[a.id] = 0);
+
+    // 1st: Inject Opening Balances row-by-row
+    accounts.forEach(acc => {
+      const openBal = prevAccounts[acc.id] || 0;
+      runTotal += openBal;
+      runAccounts[acc.id] = openBal;
+
+      displayData.push({
+        id: `open-${acc.id}`,
+        date: `${currentMonth}-01`,
+        note: `Opening balance ${acc.name}`,
+        accountId: acc.id,
+        type: "opening",
+        amount: openBal,
+        runTotal: runTotal,
+        runAccounts: { ...runAccounts }
+      });
+    });
+
+    // 2nd: Process this month's transactions in EXACT entry order
+    currentMonthTxns.forEach(t => {
+      if (t.type === "income") {
+        runTotal += t.amount;
+        if (t.accountId) runAccounts[t.accountId] += t.amount;
+      } else if (t.type === "expense") {
+        runTotal -= t.amount;
+        if (t.accountId) runAccounts[t.accountId] -= t.amount;
+      }
+
+      displayData.push({
+        ...t,
+        runTotal: runTotal,
+        runAccounts: { ...runAccounts }
+      });
+    });
+
+    return displayData;
+  }, [transactions, accounts, currentMonth]);
+
+  // 2. Export to Excel Function
+  const exportToExcel = () => {
+    const exportData = ledgerData.map(row => {
+      const cat = categories.find(c => c.id === row.categoryId);
+      const acc = accounts.find(a => a.id === row.accountId);
+
+      // Determine if amount goes in the "In" or "Out" column
+      let inVal = "";
+      let outVal = "";
+
+      if (row.type === "income" || (row.type === "opening" && row.amount >= 0)) {
+        inVal = Math.abs(row.amount);
+      } else if (row.type === "expense" || (row.type === "opening" && row.amount < 0)) {
+        outVal = Math.abs(row.amount);
+      }
+
+      const rowData = {
+        Date: row.date,
+        Info: row.note || cat?.name || "Transaction",
+        Account: acc?.name || "—",
+        In: inVal,
+        Out: outVal,
+        "Total Bal": row.runTotal,
+      };
+
+      // Dynamically add a column for every bank
+      accounts.forEach(a => {
+        rowData[a.name] = row.runAccounts[a.id] || 0;
+      });
+
+      return rowData;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, displayDate);
+    XLSX.writeFile(workbook, `Ledger_${currentMonth}.xlsx`);
+  };
+
+  return (
+    <div>
+      {/* HEADER & MONTH NAVIGATION */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>📊 Excel Sheet</div>
+        <Btn onClick={exportToExcel} style={{ padding: "8px 12px", fontSize: 12 }}>⬇ Export .xlsx</Btn>
+      </div>
+
+      <Card style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600 }}>MONTHLY LEDGER</div>
+        <div style={{ display: "flex", alignItems: "center", background: COLORS.bg, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>
+          <button onClick={() => handleMonthChange(-1)} style={{ background: "none", border: "none", color: COLORS.accent, padding: "6px 10px", cursor: "pointer", fontWeight: "bold" }}>←</button>
+          <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 700, padding: "0 8px", minWidth: 100, textAlign: "center" }}>
+            {displayDate}
+          </span>
+          <button onClick={() => handleMonthChange(1)} style={{ background: "none", border: "none", color: COLORS.accent, padding: "6px 10px", cursor: "pointer", fontWeight: "bold" }}>→</button>
+        </div>
+      </Card>
+
+      {/* SPREADSHEET TABLE */}
+      <div style={{ overflowX: "auto", background: COLORS.card, borderRadius: 12, border: `1px solid ${COLORS.border}` }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, textAlign: "left", whiteSpace: "nowrap" }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${COLORS.border}`, background: COLORS.bg, color: COLORS.textMuted }}>
+              <th style={{ padding: "12px" }}>Date</th>
+              <th style={{ padding: "12px" }}>Info</th>
+              <th style={{ padding: "12px" }}>Account</th>
+              <th style={{ padding: "12px", color: COLORS.income }}>In</th>
+              <th style={{ padding: "12px", color: COLORS.expense }}>Out</th>
+              <th style={{ padding: "12px", color: COLORS.text }}>Total Bal</th>
+              {accounts.map(acc => <th key={acc.id} style={{ padding: "12px" }}>{acc.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {ledgerData.map(row => {
+              const acc = accounts.find(a => a.id === row.accountId);
+
+              const isIn = row.type === "income" || (row.type === "opening" && row.amount >= 0);
+              const isOut = row.type === "expense" || (row.type === "opening" && row.amount < 0);
+
+              return (
+                <tr key={row.id} style={{ borderBottom: `1px solid ${COLORS.border}`, background: row.type === "opening" ? "rgba(255,255,255,0.03)" : "transparent" }}>
+                  <td style={{ padding: "12px", color: COLORS.textMuted }}>{row.date.slice(5)}</td>
+                  <td style={{ padding: "12px", color: row.type === "opening" ? COLORS.textMuted : COLORS.text, fontStyle: row.type === "opening" ? "italic" : "normal" }}>
+                    {row.note || "—"}
+                  </td>
+                  <td style={{ padding: "12px", color: COLORS.textSub }}>{acc?.name || "—"}</td>
+
+                  {/* IN Column */}
+                  <td style={{ padding: "12px", color: COLORS.income, fontWeight: "bold" }}>
+                    {isIn && row.amount !== 0 ? fmt(Math.abs(row.amount)) : ""}
+                  </td>
+
+                  {/* OUT Column */}
+                  <td style={{ padding: "12px", color: COLORS.expense, fontWeight: "bold" }}>
+                    {isOut && row.amount !== 0 ? fmt(Math.abs(row.amount)) : ""}
+                  </td>
+
+                  {/* TOTAL BAL Column */}
+                  <td style={{ padding: "12px", color: COLORS.text, fontWeight: "bold", background: "rgba(255,255,255,0.02)" }}>
+                    {fmt(row.runTotal)}
+                  </td>
+
+                  {/* BANK COLUMNS */}
+                  {accounts.map(a => (
+                    <td key={a.id} style={{ padding: "12px", color: COLORS.textMuted, background: "rgba(255,255,255,0.02)" }}>
+                      {fmt(row.runAccounts[a.id] || 0)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {ledgerData.length === 0 && <div style={{ padding: 40, textAlign: "center", color: COLORS.textMuted }}>No transactions found for {displayDate}.</div>}
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function PocketLedger() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [transactions, setTransactions] = useState([]);
+  const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7));
+
+  const [accounts, setAccounts] = useState([
+    { id: "bank_secondary", name: "SBI", icon: "🏛️", color: "#0e3ba4" },
+    { id: "bank_primary", name: "Federal Bank", icon: "🏦", color: "#7EB8FF" },
+    { id: "cash", name: "Cash in Hand", icon: "💵", color: "#5de61e" },
+  ]);
   const [categories, setCategories] = useState([
     { id: "food", name: "Food", icon: "🍔", color: "#FF8C5E" },
     { id: "travel", name: "Travel", icon: "🚗", color: "#7EB8FF" },
@@ -860,82 +1468,118 @@ export default function PocketLedger() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
     });
-
     return () => unsubscribe();
   }, []);
 
-  // // Notification simulation
-  // useEffect(() => {
-  //   const now = new Date();
-  //   if (now.getHours() === 20) {
-  //     // Would fire notification at 8PM
-  //   }
-  // }, []);
-
   useEffect(() => {
     if (!user) return;
-
-    const q = query(
-      collection(db, "users", user.uid, "transactions"),
-      orderBy("date", "desc")
-    );
-
+    const q = query(collection(db, "users", user.uid, "transactions"), orderBy("date", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const txnData = snapshot.docs.map(doc => {
         const data = doc.data();
-
         return {
-          id: doc.id,
           ...data,
-          date: data.date?.toDate
-            ? data.date.toDate().toISOString().split("T")[0]
-            : data.date,
+          id: doc.id, // Fixed: Placed AFTER data spread
+          date: data.date?.toDate ? data.date.toDate().toISOString().split("T")[0] : data.date,
           isDeleted: data.isDeleted ?? false,
         };
       });
-
       setTransactions(txnData);
     });
-
     return () => unsubscribe();
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
-
     const q = collection(db, "users", user.uid, "people");
-
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const peopleData = snapshot.docs.map(docSnap => ({
-        id: docSnap.id,
         ...docSnap.data(),
+        id: docSnap.id, // Fixed: Placed AFTER data spread
       }));
-
       setPeople(peopleData);
     });
+    return () => unsubscribe();
+  }, [user]);
 
+  // --- ADD THESE TWO NEW USE-EFFECTS ---
+
+  // Fetch Goals
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, "users", user.uid, "goals");
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const goalsData = snapshot.docs.map(docSnap => ({
+        ...docSnap.data(),
+        id: docSnap.id,
+      }));
+      setGoals(goalsData);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Liabilities
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, "users", user.uid, "liabilities");
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const liabData = snapshot.docs.map(docSnap => ({
+        ...docSnap.data(),
+        id: docSnap.id,
+      }));
+      setLiabilities(liabData);
+    });
     return () => unsubscribe();
   }, [user]);
 
   const addPerson = async (personData) => {
-    if (!user) return;
+    if (!user) return null;
 
     try {
-      await addDoc(
-        collection(db, "users", user.uid, "people"),
-        {
-          ...personData,
-          createdAt: serverTimestamp(),
+      // Fixed: Duplicate entry protection based on name
+      const existing = people.find(p => p.name.toLowerCase() === personData.name.toLowerCase());
+
+      if (existing) {
+        let newBalance = existing.balance;
+
+        if (existing.type === personData.type) {
+          newBalance += personData.balance;
+        } else {
+          newBalance -= personData.balance;
         }
-      );
+
+        let newType = existing.type;
+        if (newBalance < 0) {
+          newBalance = Math.abs(newBalance);
+          newType = existing.type === "lend" ? "owe" : "lend";
+        }
+
+        const ref = doc(db, "users", user.uid, "people", existing.id);
+        await updateDoc(ref, {
+          balance: newBalance,
+          type: newType,
+          updatedAt: serverTimestamp()
+        });
+        return existing.id;
+      } else {
+        const docRef = await addDoc(collection(db, "users", user.uid, "people"), {
+          name: personData.name,
+          balance: personData.balance,
+          type: personData.type,
+          createdAt: serverTimestamp(),
+        });
+        return docRef.id;
+      }
     } catch (error) {
       console.error("Add Person Error:", error);
+      return null;
     }
   };
 
@@ -943,80 +1587,74 @@ export default function PocketLedger() {
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
-
       await setDoc(doc(db, "users", user.uid), {
         name: user.displayName,
         email: user.email,
         photoURL: user.photoURL,
         createdAt: new Date(),
       }, { merge: true });
-
     } catch (error) {
       console.error("Login Error:", error);
     }
   };
 
-  const logout = async () => {
-    await signOut(auth);
-  };
+  const logout = async () => await signOut(auth);
 
-  const addTransaction = async (txnData) => {
+  const saveTransaction = async (txnData) => {
     if (!user) return;
 
     try {
-      const docRef = await addDoc(
-        collection(db, "users", user.uid, "transactions"),
-        {
-          ...txnData,
+      const { id, ...data } = txnData;
+
+      if (id) {
+        // Edit flow
+        const txnRef = doc(db, "users", user.uid, "transactions", id);
+        await updateDoc(txnRef, {
+          ...data,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        // Create flow
+        const docRef = await addDoc(collection(db, "users", user.uid, "transactions"), {
+          ...data,
           createdAt: serverTimestamp(),
           isDeleted: false
-        }
-      );
-
-      if (
-        txnData.type === "expense" &&
-        txnData.spendType === "other" &&
-        txnData.personId
-      ) {
-        const personRef = doc(
-          db,
-          "users",
-          user.uid,
-          "people",
-          txnData.personId
-        );
-
-        await updateDoc(personRef, {
-          balance: increment(txnData.amount)
         });
+
+        if (data.type === "expense" && data.spendType === "other" && data.personId) {
+          const personRef = doc(db, "users", user.uid, "people", data.personId);
+          await updateDoc(personRef, {
+            balance: increment(data.amount)
+          });
+        }
       }
-
     } catch (error) {
-      console.error("Add Transaction Error:", error);
+      console.error("Save Transaction Error:", error);
     }
   };
-  const deleteTransaction = async (id) => {
+
+  const deleteTransaction = (id) => {
     if (!user) return;
-
-    try {
-      const txnRef = doc(db, "users", user.uid, "transactions", id);
-      await updateDoc(txnRef, {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-      });
-      console.log("Deleting ID:", id);
-    } catch (error) {
-      console.error("Delete Error:", error);
-    }
+    setConfirmDialog({
+      title: "Delete Transaction",
+      message: "Are you sure you want to delete this transaction? It will be moved to the trash.",
+      onConfirm: async () => {
+        try {
+          const txnRef = doc(db, "users", user.uid, "transactions", id);
+          await updateDoc(txnRef, { isDeleted: true, deletedAt: serverTimestamp() });
+        } catch (error) {
+          console.error("Delete Error:", error);
+        }
+        setConfirmDialog(null);
+      }
+    });
   };
+
   const restoreTransaction = async (id) => {
     if (!user) return;
-
     try {
       const txnRef = doc(db, "users", user.uid, "transactions", id);
-      await updateDoc(txnRef, {
-        isDeleted: false,
-      });
+      await updateDoc(txnRef, { isDeleted: false });
     } catch (error) {
       console.error("Restore Error:", error);
     }
@@ -1024,10 +1662,8 @@ export default function PocketLedger() {
 
   const markPersonPaid = async (id) => {
     if (!user) return;
-
     try {
       const ref = doc(db, "users", user.uid, "people", id);
-
       await updateDoc(ref, {
         balance: 0,
         updatedAt: serverTimestamp(),
@@ -1042,45 +1678,228 @@ export default function PocketLedger() {
     { id: "transactions", label: "Logs", icon: "📋" },
     { id: "add", label: "Add", icon: "➕" },
     { id: "dues", label: "Dues", icon: "🤝" },
-    { id: "budget", label: "Budget", icon: "📊" },
+    { id: "balances", label: "Balances", icon: "💳" },
   ];
 
   const DRAWER_ITEMS = [
     { id: "dashboard", icon: "🏠", label: "Dashboard" },
     { id: "transactions", icon: "📋", label: "Transactions" },
     { id: "dues", icon: "🤝", label: "Dues" },
-    { id: "budget", icon: "📊", label: "Budget" },
+    { id: "balances", icon: "💳", label: "Balances" },
+    { id: "sheet", icon: "📊", label: "Excel Sheet" },
     { id: "goals", icon: "🎯", label: "Goals" },
     { id: "categories", icon: "⚙️", label: "Categories" },
   ];
 
   const renderScreen = () => {
     switch (activeTab) {
-      case "dashboard": return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} />;
+      case "dashboard": return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
       case "transactions": return <Transactions transactions={transactions} categories={categories} people={people}
         onDelete={deleteTransaction}
         onRestore={restoreTransaction}
-        onEdit={t => { setEditTxn(t); setShowAddModal(true); }} />;
+        onEdit={t => { setEditTxn(t); setShowAddModal(true); }}
+        accounts={accounts}
+        currentMonth={currentMonth} />;
       case "dues":
         return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
-      case "budget": return <BudgetPlanner budgets={budgets} categories={categories} transactions={transactions} onSave={setBudgets} />;
-      case "goals": return <GoalsScreen goals={goals} liabilities={liabilities}
-        onAddGoal={g => setGoals(gs => [...gs, g])}
-        onUpdateGoal={(id, saved) => setGoals(gs => gs.map(g => g.id === id ? { ...g, savedAmount: saved } : g))} />;
+      case "balances":
+        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} />;
+      case "goals":
+        return (
+          <GoalsScreen
+            goals={goals}
+            liabilities={liabilities}
+            onAddGoal={saveGoal}
+            onUpdateGoal={(id, saved) => saveGoal({ id, savedAmount: saved })}
+            onDeleteGoal={deleteGoal}
+            onAddLiability={saveLiability}
+            onDeleteLiability={deleteLiability}
+          />
+        );
       case "categories": return <CategoriesScreen categories={categories}
         onAdd={c => setCategories(cs => [...cs, c])}
-        onDelete={id => setCategories(cs => cs.filter(c => c.id !== id))} />;
+        onDelete={id => {
+          setConfirmDialog({
+            title: "Delete Category",
+            message: "Are you sure you want to remove this category?",
+            onConfirm: () => {
+              setCategories(cs => cs.filter(c => c.id !== id));
+              setConfirmDialog(null);
+            }
+          });
+        }} />;
+      case "sheet":
+        return <SheetScreen
+          transactions={transactions}
+          categories={categories}
+          accounts={accounts}
+          currentMonth={currentMonth}
+          onMonthChange={setCurrentMonth}
+        />;
       default: return null;
     }
+  };
+
+  // Inside PocketLedger component
+  const saveGoal = async (goalData) => {
+    if (!user) return;
+    const { id, ...data } = goalData;
+    const goalRef = doc(db, "users", user.uid, "goals", id);
+    // Using setDoc with merge: true handles both creating and updating
+    await setDoc(goalRef, { ...data, updatedAt: serverTimestamp() }, { merge: true });
+  };
+
+  const deleteGoal = (id) => {
+    if (!user) return;
+    setConfirmDialog({
+      title: "Delete Goal",
+      message: "Are you sure you want to permanently delete this saving goal? This action cannot be undone.",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, "users", user.uid, "goals", id));
+        } catch (error) {
+          console.error("Delete Goal Error:", error);
+        }
+        setConfirmDialog(null);
+      }
+    });
+  };
+
+  const saveLiability = async (liabData) => {
+    if (!user) return;
+    const { id, ...data } = liabData;
+    const liabRef = doc(db, "users", user.uid, "liabilities", id);
+    await setDoc(liabRef, { ...data, updatedAt: serverTimestamp() }, { merge: true });
+  };
+
+  const deleteLiability = (id) => {
+    if (!user) return;
+    setConfirmDialog({
+      title: "Delete Liability",
+      message: "Are you sure you want to permanently delete this liability? This action cannot be undone.",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, "users", user.uid, "liabilities", id));
+        } catch (error) {
+          console.error("Delete Liability Error:", error);
+        }
+        setConfirmDialog(null);
+      }
+    });
   };
 
   if (loading) return <div>Loading...</div>;
 
   if (!user) {
     return (
-      <div style={{ textAlign: "center", marginTop: "100px" }}>
-        <h2>PocketLedger</h2>
-        <button onClick={login}>Login with Google</button>
+      <div style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "20px",
+        background: `
+        radial-gradient(circle at 20% 20%, #1e3a5f, transparent 40%),
+        radial-gradient(circle at 80% 80%, #0f766e, transparent 40%),
+        #0b0f19
+      `
+      }}>
+
+        {/* Login Card */}
+        <div style={{
+          width: "100%",
+          maxWidth: "420px",
+          padding: "48px 36px",
+          borderRadius: "28px",
+          background: "rgba(20, 24, 35, 0.55)",
+          backdropFilter: "blur(25px)",
+          WebkitBackdropFilter: "blur(25px)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          boxShadow: "0 40px 80px rgba(0,0,0,0.7)",
+          textAlign: "center"
+        }}>
+
+          {/* Logo Icon */}
+          <div style={{
+            width: "80px",
+            height: "80px",
+            margin: "0 auto 24px",
+            borderRadius: "22px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "36px",
+            color: "#0b0f19",
+            background: "linear-gradient(135deg,#14b8a6,#06b6d4)",
+            boxShadow: "0 12px 35px rgba(20,184,166,0.45)"
+          }}>
+            ₹
+          </div>
+
+          {/* Title */}
+          <h1 style={{
+            fontSize: "32px",
+            fontWeight: "800",
+            letterSpacing: "-0.03em",
+            color: "#f1f5f9",
+            marginBottom: "8px"
+          }}>
+            PocketLedger
+          </h1>
+
+          {/* Subtitle */}
+          <p style={{
+            color: "#94a3b8",
+            fontSize: "14px",
+            marginBottom: "34px"
+          }}>
+            Track your expenses smarter
+          </p>
+
+          {/* Google Login Button */}
+          <button
+            onClick={login}
+            style={{
+              width: "100%",
+              padding: "14px",
+              borderRadius: "14px",
+              border: "1px solid rgba(255,255,255,0.1)",
+              background: "rgba(255,255,255,0.06)",
+              color: "#e2e8f0",
+              fontWeight: "600",
+              fontSize: "15px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "12px",
+              cursor: "pointer",
+              transition: "all 0.25s ease"
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.transform = "translateY(-2px)";
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+              e.currentTarget.style.boxShadow = "0 10px 25px rgba(0,0,0,0.4)";
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.transform = "translateY(0)";
+              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <img src="/glogo.png" width="20" alt="google" />
+            Continue with Google
+          </button>
+
+          {/* Footer */}
+          <div style={{
+            marginTop: "32px",
+            fontSize: "12px",
+            color: "#64748b"
+          }}>
+            Secure cloud sync via Firebase ☁️
+          </div>
+
+        </div>
       </div>
     );
   }
@@ -1097,19 +1916,50 @@ export default function PocketLedger() {
         select option { background: #161A23; }
       `}</style>
 
-      <div>
-        <img
-          src={user.photoURL || "https://ui-avatars.com/api/?name=" + user.displayName}
-          width="40"
-          height="40"
-          style={{ borderRadius: "50%", marginRight: 10, marginLeft: 20 }}
-          alt="profile"
-        />
-        <span>{user.displayName}</span>
-        <button onClick={logout}>Logout</button>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "16px",
+        background: COLORS.card,
+        borderRadius: "20px",
+        border: `1px solid ${COLORS.border}`,
+        marginBottom: "24px"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ position: "relative" }}>
+            <img
+              src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
+              width="44"
+              height="44"
+              style={{ borderRadius: "14px", objectFit: "cover", border: `2px solid ${COLORS.border}` }}
+              alt="profile"
+            />
+            <div style={{
+              position: "absolute", bottom: -2, right: -2, width: 14, height: 14,
+              background: COLORS.income, border: `3px solid ${COLORS.card}`, borderRadius: "50%"
+            }} />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 15 }}>{user.displayName}</span>
+            <span style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase" }}>
+              Personal Wallet
+            </span>
+          </div>
+        </div>
+
+        <button onClick={logout} style={{
+          background: COLORS.expenseDim, border: `1px solid ${COLORS.expense}33`,
+          color: COLORS.expense, padding: "8px 16px", borderRadius: "10px",
+          fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all 0.2s"
+        }}
+          onMouseEnter={e => e.currentTarget.style.background = COLORS.expense + "33"}
+          onMouseLeave={e => e.currentTarget.style.background = COLORS.expenseDim}
+        >
+          Sign Out
+        </button>
       </div>
 
-      {/* Top Bar */}
       <div style={{
         position: "sticky", top: 0, zIndex: 100, background: COLORS.bg + "dd",
         backdropFilter: "blur(12px)", borderBottom: `1px solid ${COLORS.border}`,
@@ -1139,7 +1989,6 @@ export default function PocketLedger() {
         </div>
       </div>
 
-      {/* Drawer */}
       {drawerOpen && (
         <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }} onClick={() => setDrawerOpen(false)}>
           <div onClick={e => e.stopPropagation()} style={{
@@ -1171,12 +2020,10 @@ export default function PocketLedger() {
         </div>
       )}
 
-      {/* Main Content */}
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "20px 16px 100px" }}>
         {renderScreen()}
       </div>
 
-      {/* Bottom Tab Bar */}
       <div style={{
         position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
         background: COLORS.card + "ee", backdropFilter: "blur(16px)",
@@ -1210,16 +2057,25 @@ export default function PocketLedger() {
         })}
       </div>
 
-      {/* Add/Edit Transaction Modal */}
       {showAddModal && (
         <Modal title={editTxn ? "✏️ Edit Transaction" : "➕ New Transaction"} onClose={() => { setShowAddModal(false); setEditTxn(null); }}>
           <AddTransaction
             categories={categories} people={people}
-            onAdd={addTransaction}
+            onAdd={saveTransaction}
+            onAddPerson={addPerson}
+            accounts={accounts}
             editTxn={editTxn}
             onClose={() => { setShowAddModal(false); setEditTxn(null); }}
           />
         </Modal>
+      )}
+      {confirmDialog && (
+        <ConfirmModal 
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
       )}
     </div>
   );
