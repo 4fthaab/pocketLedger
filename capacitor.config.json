@@ -2,5 +2,9 @@
   "appId": "com.afthab.meezaan",
   "appName": "Mee-Zaan",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "hostname": "pocketledger-4fd7d.firebaseapp.com"
+  }
 }

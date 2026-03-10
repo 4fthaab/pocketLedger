@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, ResponsiveContainer } from "recharts";
 import { auth, provider, db } from "./firebase";
-import { signInWithPopup, onAuthStateChanged, signOut } from "firebase/auth";
+import { signInWithRedirect, onAuthStateChanged, signOut } from "firebase/auth";
 import {
   doc, setDoc, collection, addDoc, onSnapshot, query,
   orderBy, serverTimestamp, updateDoc, increment, deleteDoc
@@ -1471,9 +1471,19 @@ export default function PocketLedger() {
   const [confirmDialog, setConfirmDialog] = useState(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       setLoading(false);
+      
+      // Save user to DB when they successfully return from the redirect
+      if (currentUser) {
+        await setDoc(doc(db, "users", currentUser.uid), {
+          name: currentUser.displayName,
+          email: currentUser.email,
+          photoURL: currentUser.photoURL,
+          lastLogin: new Date(),
+        }, { merge: true });
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -1585,14 +1595,7 @@ export default function PocketLedger() {
 
   const login = async () => {
     try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      await setDoc(doc(db, "users", user.uid), {
-        name: user.displayName,
-        email: user.email,
-        photoURL: user.photoURL,
-        createdAt: new Date(),
-      }, { merge: true });
+      await signInWithRedirect(auth, provider);
     } catch (error) {
       console.error("Login Error:", error);
     }
