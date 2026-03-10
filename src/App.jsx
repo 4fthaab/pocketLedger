@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, ResponsiveContainer } from "recharts";
-import { auth, provider, db } from "./firebase";
-import { signInWithRedirect, onAuthStateChanged, signOut } from "firebase/auth";
+import { auth, db } from "./firebase";
+import { Browser } from "@capacitor/browser";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, onAuthStateChanged, signOut } from "firebase/auth";
 import {
   doc, setDoc, collection, addDoc, onSnapshot, query,
   orderBy, serverTimestamp, updateDoc, increment, deleteDoc
@@ -239,9 +240,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
     });
   }
 
-  const healthScore = netWorth > 0 ? Math.min(100, (netWorth / 20000) * 100) : 0;
-  const healthColor = healthScore > 60 ? COLORS.income : healthScore > 30 ? COLORS.warning : COLORS.expense;
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -270,68 +268,97 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
         </div>
       </div>
 
-      {/* --- TOP ROW: INCOME, EXPENSE, BALANCE --- */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))",
-        gap: 12
-      }}>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
+      {/* --- SUMMARY CARDS --- */}
+      <div
+        className="summary-grid"
+        style={{
+          display: "grid",
+          gap: 14,
+          marginBottom: 16
+        }}
+      >
+        {/* INCOME */}
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>INCOME</div>
-          <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(income)}</div>
+          <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(income)}
+          </div>
         </Card>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
+
+        {/* EXPENSE */}
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>EXPENSE</div>
-          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(expense)}</div>
+          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(expense)}
+          </div>
         </Card>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%", border: `1px solid ${COLORS.accent}33` }}>
+
+        {/* TOTAL BALANCE */}
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", border: `1px solid ${COLORS.accent}33` }}>
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TOTAL BALANCE</div>
           <div style={{ color: cumulativeBalance >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
             {fmt(cumulativeBalance)}
           </div>
           <div style={{ color: COLORS.textSub, fontSize: 9, marginTop: 4 }}>Carried over</div>
         </Card>
-      </div>
-
-      {/* --- SECOND ROW: TO RECEIVE, I OWE, NET WORTH --- */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(105px, 1fr))",
-        gap: 12
-      }}>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TO RECEIVE</div>
-          <div style={{ color: COLORS.pending, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(toReceive)}</div>
-        </Card>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>I OWE</div>
-          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(iOwe)}</div>
-        </Card>
-        <Card style={{
-          display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%",
-          background: netWorth >= 0 ? `linear-gradient(135deg, ${COLORS.card}, ${COLORS.accent}05)` : COLORS.card,
-          border: `1px solid ${netWorth >= 0 ? COLORS.income + "44" : COLORS.expense + "44"}`
-        }}>
+        {/* NET WORTH */}
+        <Card
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            background: netWorth >= 0
+              ? `linear-gradient(135deg, ${COLORS.card}, ${COLORS.accent}05)`
+              : COLORS.card,
+            border: `1px solid ${netWorth >= 0 ? COLORS.income + "44" : COLORS.expense + "44"}`
+          }}
+        >
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>NET WORTH</div>
-          <div style={{ color: netWorth >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>{fmt(netWorth)}</div>
+          <div style={{ color: netWorth >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(netWorth)}
+          </div>
+        </Card>
+
+        {/* TO RECEIVE */}
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TO RECEIVE</div>
+          <div style={{ color: COLORS.pending, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(toReceive)}
+          </div>
+        </Card>
+
+        {/* I OWE */}
+        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>I OWE</div>
+          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
+            {fmt(iOwe)}
+          </div>
         </Card>
       </div>
 
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
         <Card>
           <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🍕 By Category</div>
           {pieData.length > 0 ? (
             <>
+
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
-                  <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={65} innerRadius={35}>
+                  <Pie
+                    data={pieData}
+                    dataKey="value"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={55}
+                    innerRadius={28}
+                  >
                     {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                   </Pie>
                   <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} />
                 </PieChart>
               </ResponsiveContainer>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 10px", marginTop: 4 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px", marginTop: 4 }}>
                 {pieData.slice(0, 5).map((d, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: COLORS.textSub }}>
                     <div style={{ width: 8, height: 8, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length] }} />
@@ -1460,7 +1487,6 @@ export default function PocketLedger() {
     { id: "salary", name: "Salary", icon: "💰", color: "#4FFFB0" },
   ]);
   const [people, setPeople] = useState([]);
-  const [budgets, setBudgets] = useState([]);
   const [goals, setGoals] = useState([]);
   const [liabilities, setLiabilities] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1470,11 +1496,19 @@ export default function PocketLedger() {
   const [loading, setLoading] = useState(true);
   const [confirmDialog, setConfirmDialog] = useState(null);
 
+  // New Auth States
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       setLoading(false);
-      
+
       // Save user to DB when they successfully return from the redirect
       if (currentUser) {
         await setDoc(doc(db, "users", currentUser.uid), {
@@ -1593,11 +1627,43 @@ export default function PocketLedger() {
     }
   };
 
-  const login = async () => {
+  const handleSignUp = async (e) => {
+    if (e) e.preventDefault();
+    setAuthError("");
+    if (!authEmail || !authPassword || !authName) return setAuthError("All fields are required.");
+
+    setIsAuthLoading(true);
     try {
-      await signInWithRedirect(auth, provider);
+      const userCredential = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+      await updateProfile(userCredential.user, { displayName: authName });
+
+      // Force local state update so the UI immediately shows the new name
+      setUser({ ...userCredential.user, displayName: authName });
+
+      await setDoc(doc(db, "users", userCredential.user.uid), {
+        name: authName,
+        email: authEmail,
+        createdAt: serverTimestamp(),
+      }, { merge: true });
     } catch (error) {
-      console.error("Login Error:", error);
+      setAuthError(error.message.replace("Firebase: ", ""));
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleLogin = async (e) => {
+    if (e) e.preventDefault();
+    setAuthError("");
+    if (!authEmail || !authPassword) return setAuthError("Email and password are required.");
+
+    setIsAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, authEmail, authPassword);
+    } catch (error) {
+      setAuthError("Invalid email or password.");
+    } finally {
+      setIsAuthLoading(false);
     }
   };
 
@@ -1796,110 +1862,50 @@ export default function PocketLedger() {
   if (!user) {
     return (
       <div style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "20px",
-        background: `
-        radial-gradient(circle at 20% 20%, #1e3a5f, transparent 40%),
-        radial-gradient(circle at 80% 80%, #0f766e, transparent 40%),
-        #0b0f19
-      `
+        minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px",
+        background: `radial-gradient(circle at 20% 20%, #1e3a5f, transparent 40%), radial-gradient(circle at 80% 80%, #0f766e, transparent 40%), #0b0f19`
       }}>
-
-        {/* Login Card */}
         <div style={{
-          width: "100%",
-          maxWidth: "420px",
-          padding: "48px 36px",
-          borderRadius: "28px",
-          background: "rgba(20, 24, 35, 0.55)",
-          backdropFilter: "blur(25px)",
-          WebkitBackdropFilter: "blur(25px)",
-          border: "1px solid rgba(255,255,255,0.06)",
-          boxShadow: "0 40px 80px rgba(0,0,0,0.7)",
-          textAlign: "center"
+          width: "100%", maxWidth: "420px", padding: "40px 32px", borderRadius: "28px",
+          background: "rgba(20, 24, 35, 0.55)", backdropFilter: "blur(25px)", WebkitBackdropFilter: "blur(25px)",
+          border: "1px solid rgba(255,255,255,0.06)", boxShadow: "0 40px 80px rgba(0,0,0,0.7)", textAlign: "center"
         }}>
 
-          {/* Logo Icon */}
           <div style={{
-            width: "80px",
-            height: "80px",
-            margin: "0 auto 24px",
-            borderRadius: "22px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: "36px",
-            color: "#0b0f19",
-            background: "linear-gradient(135deg,#14b8a6,#06b6d4)",
+            width: "70px", height: "70px", margin: "0 auto 20px", borderRadius: "20px",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "32px",
+            color: "#0b0f19", background: "linear-gradient(135deg,#14b8a6,#06b6d4)",
             boxShadow: "0 12px 35px rgba(20,184,166,0.45)"
-          }}>
-            ₹
-          </div>
+          }}>₹</div>
 
-          {/* Title */}
-          <h1 style={{
-            fontSize: "32px",
-            fontWeight: "800",
-            letterSpacing: "-0.03em",
-            color: "#f1f5f9",
-            marginBottom: "8px"
-          }}>
-            PocketLedger
+          <h1 style={{ fontSize: "28px", fontWeight: "800", letterSpacing: "-0.03em", color: "#f1f5f9", marginBottom: "8px" }}>
+            Mee-Zaan
           </h1>
-
-          {/* Subtitle */}
-          <p style={{
-            color: "#94a3b8",
-            fontSize: "14px",
-            marginBottom: "34px"
-          }}>
-            Track your expenses smarter
+          <p style={{ color: "#94a3b8", fontSize: "14px", marginBottom: "28px" }}>
+            {authMode === "login" ? "Welcome back" : "Create your account"}
           </p>
 
-          {/* Google Login Button */}
-          <button
-            onClick={login}
-            style={{
-              width: "100%",
-              padding: "14px",
-              borderRadius: "14px",
-              border: "1px solid rgba(255,255,255,0.1)",
-              background: "rgba(255,255,255,0.06)",
-              color: "#e2e8f0",
-              fontWeight: "600",
-              fontSize: "15px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "12px",
-              cursor: "pointer",
-              transition: "all 0.25s ease"
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.transform = "translateY(-2px)";
-              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
-              e.currentTarget.style.boxShadow = "0 10px 25px rgba(0,0,0,0.4)";
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.transform = "translateY(0)";
-              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >
-            <img src="/glogo.png" width="20" alt="google" />
-            Continue with Google
-          </button>
+          {/* Form Area */}
+          <div style={{ textAlign: "left" }}>
+            <Toggle value={authMode} onChange={(v) => { setAuthMode(v); setAuthError(""); }} options={[
+              { value: "login", label: "Login", color: COLORS.accent },
+              { value: "signup", label: "Sign Up", color: COLORS.accent }
+            ]} />
 
-          {/* Footer */}
-          <div style={{
-            marginTop: "32px",
-            fontSize: "12px",
-            color: "#64748b"
-          }}>
-            Secure cloud sync via Firebase ☁️
+            <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "2px" }}>
+              {authMode === "signup" && (
+                <Input label="Full Name" value={authName} onChange={setAuthName} placeholder="Name" />
+              )}
+
+              <Input label="Email Address" type="email" value={authEmail} onChange={setAuthEmail} placeholder="you@example.com" />
+              <Input label="Password" type="password" value={authPassword} onChange={setAuthPassword} placeholder="••••••••" />
+
+              {authError && <div style={{ color: COLORS.expense, fontSize: "13px", fontWeight: "600", marginBottom: "12px", textAlign: "center" }}>{authError}</div>}
+
+              <Btn onClick={authMode === "login" ? handleLogin : handleSignUp} style={{ width: "100%", padding: "14px 0", marginTop: "8px" }}>
+                {isAuthLoading ? "Processing..." : (authMode === "login" ? "Log In" : "Create Account")}
+              </Btn>
+            </div>
           </div>
 
         </div>
@@ -2073,7 +2079,7 @@ export default function PocketLedger() {
         </Modal>
       )}
       {confirmDialog && (
-        <ConfirmModal 
+        <ConfirmModal
           title={confirmDialog.title}
           message={confirmDialog.message}
           onConfirm={confirmDialog.onConfirm}

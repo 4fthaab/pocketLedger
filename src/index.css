@@ -9,3 +9,13 @@ html, body, #root {
   background: #0b0f19;
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
 }
+
+.summary-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 600px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
