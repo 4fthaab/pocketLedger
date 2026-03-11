@@ -176,8 +176,13 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
 
   // 1. THIS MONTH'S TRANSACTIONS (Resets to zero initially)
   const txns = getMonthTxns(transactions, currentMonth).filter(t => !t.isDeleted);
-  const income = txns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
-  const expense = txns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  // const income = txns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const income = txns
+    .filter(t => t.type === "income" && !t.note?.includes("Transfer"))
+    .reduce((s, t) => s + t.amount, 0);
+  const expense = txns
+    .filter(t => t.type === "expense" && !t.note?.includes("Transfer"))
+    .reduce((s, t) => s + t.amount, 0);
 
   // 2. CUMULATIVE BALANCE (Carried over from previous months)
   const cumulativeTxns = transactions.filter(t => !t.isDeleted && t.date.slice(0, 7) <= currentMonth);
@@ -202,7 +207,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
   };
 
   const catSpend = {};
-  txns.filter(t => t.type === "expense").forEach(t => {
+  txns.filter(t => t.type === "expense" && !t.note?.includes("Transfer")).forEach(t => {
     catSpend[t.categoryId] = (catSpend[t.categoryId] || 0) + t.amount;
   });
   const pieData = Object.entries(catSpend).map(([cid, val]) => {
@@ -221,8 +226,10 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
 
     lineData.push({
       day: key.slice(-2),
-      income: dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0),
-      expense: dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0),
+      income: dayTxns.filter(t => t.type === "income" && !t.note?.includes("Transfer"))
+        .reduce((s, t) => s + t.amount, 0),
+      expense: dayTxns.filter(t => t.type === "expense" && !t.note?.includes("Transfer"))
+        .reduce((s, t) => s + t.amount, 0),
     });
   }
 
@@ -238,8 +245,10 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
     fullMonthLineData.push({
       day: dayString,
       fullDate: key,
-      income: dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0),
-      expense: dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0),
+      income: dayTxns.filter(t => t.type === "income" && !t.note?.includes("Transfer"))
+        .reduce((s, t) => s + t.amount, 0),
+      expense: dayTxns.filter(t => t.type === "expense" && !t.note?.includes("Transfer"))
+        .reduce((s, t) => s + t.amount, 0),
     });
   }
 
@@ -345,7 +354,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
           <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🍕 By Category</div>
           {pieData.length > 0 ? (
             <>
-
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
                   <Pie
@@ -358,7 +366,24 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
                   >
                     {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                   </Pie>
-                  <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} />
+                  <Tooltip
+                    formatter={(v) => fmt(v)}
+                    contentStyle={{
+                      background: COLORS.card,       // Matches your card background (#161A23)
+                      border: `1px solid ${COLORS.border}`,
+                      borderRadius: "12px",
+                      padding: "8px 12px",
+                      boxShadow: "0 10px 20px rgba(0,0,0,0.4)"
+                    }}
+                    itemStyle={{
+                      color: COLORS.text,            // White/Light text (#F0F4FF)
+                      fontSize: "14px",
+                      fontWeight: "600"
+                    }}
+                    // This removes the default "square" icon color if you want a cleaner look
+                    iconType="circle"
+                  />
+                  {/* <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} /> */}
                 </PieChart>
               </ResponsiveContainer>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px", marginTop: 4 }}>
@@ -893,7 +918,6 @@ function BalancesScreen({ accounts, transactions, currentMonth }) {
     const accTxns = validTxns.filter(t => t.accountId === accountId);
     const income = accTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
     const expense = accTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-
     return income - expense;
   };
 
@@ -1208,49 +1232,99 @@ function CategoriesScreen({ categories, onAdd, onDelete }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState("💡");
   const [color, setColor] = useState(PIE_COLORS[0]);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleAdd = () => {
-    if (!name) return;
-    onAdd({ id: uid(), name, icon, color });
-    setName(""); setShowAdd(false);
+  const handleAdd = async () => {
+    if (!name.trim()) return;
+
+    setIsSaving(true);
+    try {
+      // We pass the data to the parent function (saveCategory) 
+      // which now handles the Firebase setDoc logic
+      await onAdd({
+        id: uid(),
+        name: name.trim(),
+        icon,
+        color
+      });
+
+      // Reset form only on success
+      setName("");
+      setShowAdd(false);
+    } catch (error) {
+      alert("Failed to save category. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>⚙️ Categories</div>
-        <Btn onClick={() => setShowAdd(v => !v)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn>
+        <Btn onClick={() => setShowAdd(v => !v)} style={{ padding: "8px 16px", fontSize: 12 }}>
+          {showAdd ? "Close" : "+ Add"}
+        </Btn>
       </div>
 
-      {showAdd && (
-        <Card style={{ marginBottom: 14 }}>
-          <Input label="Name" value={name} onChange={setName} placeholder="Category name" />
-          <Input label="Icon (emoji)" value={icon} onChange={setIcon} placeholder="💡" />
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Color</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              {PIE_COLORS.map(c => (
-                <div key={c} onClick={() => setColor(c)}
-                  style={{ width: 28, height: 28, borderRadius: 14, background: c, cursor: "pointer", border: color === c ? "2px solid #fff" : "2px solid transparent" }} />
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAdd} style={{ flex: 1 }}>Add</Btn>
-            <Btn onClick={() => setShowAdd(false)} outline style={{ flex: 1 }}>Cancel</Btn>
-          </div>
-        </Card>
-      )}
+      <AnimatePresence>
+        {showAdd && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            style={{ overflow: "hidden" }}
+          >
+            <Card style={{ marginBottom: 14, border: `1px solid ${COLORS.accent}33` }}>
+              <Input label="Category Name" value={name} onChange={setName} placeholder="e.g., Entertainment" />
+              <Input label="Icon (emoji)" value={icon} onChange={setIcon} placeholder="💡" />
+
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                  Theme Color
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {PIE_COLORS.map(c => (
+                    <div
+                      key={c}
+                      onClick={() => setColor(c)}
+                      style={{
+                        width: 32, height: 32, borderRadius: 10, background: c,
+                        cursor: "pointer", border: color === c ? "2px solid #fff" : "2px solid transparent",
+                        transition: "transform 0.1s"
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.transform = "scale(1.1)"}
+                      onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={handleAdd} style={{ flex: 1 }} disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Add Category"}
+                </Btn>
+                <Btn onClick={() => setShowAdd(false)} outline style={{ flex: 1 }}>Cancel</Btn>
+              </div>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         {categories.map(cat => (
           <Card key={cat.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-            <div style={{ width: 40, height: 40, borderRadius: 12, background: cat.color + "22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
+            <div style={{
+              width: 42, height: 42, borderRadius: 12, background: cat.color + "22",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22
+            }}>
               {cat.icon}
             </div>
-            <div style={{ flex: 1, color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{cat.name}</div>
-            <button onClick={() => onDelete(cat.id)}
-              style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 16, padding: "4px" }}>
+            <div style={{ flex: 1, color: COLORS.text, fontWeight: 600, fontSize: 14 }}>{cat.name}</div>
+            <button
+              onClick={() => onDelete(cat.id)}
+              style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 18, padding: "4px" }}
+            >
               ✕
             </button>
           </Card>
@@ -1542,12 +1616,7 @@ export default function PocketLedger() {
     { id: "bank_primary", name: "Federal Bank", icon: "🏦", color: "#7EB8FF" },
     { id: "cash", name: "Cash in Hand", icon: "💵", color: "#5de61e" },
   ]);
-  const [categories, setCategories] = useState([
-    { id: "food", name: "Food", icon: "🍔", color: "#FF8C5E" },
-    { id: "travel", name: "Travel", icon: "🚗", color: "#7EB8FF" },
-    { id: "shopping", name: "Shopping", icon: "🛍️", color: "#C07EFF" },
-    { id: "salary", name: "Salary", icon: "💰", color: "#4FFFB0" },
-  ]);
+  const [categories, setCategories] = useState([]);
   const [people, setPeople] = useState([]);
   const [goals, setGoals] = useState([]);
   const [liabilities, setLiabilities] = useState([]);
@@ -1641,6 +1710,25 @@ export default function PocketLedger() {
         id: docSnap.id,
       }));
       setLiabilities(liabData);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, "users", user.uid, "categories"),
+      orderBy("createdAt", "asc") // "asc" for oldest first, "desc" for newest first
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const catData = snapshot.docs.map(docSnap => ({
+        ...docSnap.data(),
+        id: docSnap.id,
+      }));
+      // If the user has no categories yet (new account), you could seed defaults here
+      if (catData.length > 0) {
+        setCategories(catData);
+      }
     });
     return () => unsubscribe();
   }, [user]);
@@ -1804,6 +1892,38 @@ export default function PocketLedger() {
     }
   };
 
+  // ─── FIREBASE-BACKED CATEGORY ACTIONS ───
+
+  const saveCategory = async (catData) => {
+    if (!user) return;
+    try {
+      // Use the existing user-specific category collection
+      const catRef = doc(db, "users", user.uid, "categories", catData.id);
+      await setDoc(catRef, {
+        ...catData,
+        createdAt: serverTimestamp()
+      }, { merge: true });
+    } catch (error) {
+      console.error("Save Category Error:", error);
+    }
+  };
+
+  const deleteCategory = async (id) => {
+    if (!user) return;
+    setConfirmDialog({
+      title: "Delete Category",
+      message: "Are you sure? This won't delete the transactions in this category, but it will remove the category from your list.",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, "users", user.uid, "categories", id));
+        } catch (error) {
+          console.error("Delete Category Error:", error);
+        }
+        setConfirmDialog(null);
+      }
+    });
+  };
+
   const TABS = [
     { id: "dashboard", label: "Home", icon: "🏠" },
     { id: "transactions", label: "Logs", icon: "📋" },
@@ -1847,18 +1967,14 @@ export default function PocketLedger() {
             onDeleteLiability={deleteLiability}
           />
         );
-      case "categories": return <CategoriesScreen categories={categories}
-        onAdd={c => setCategories(cs => [...cs, c])}
-        onDelete={id => {
-          setConfirmDialog({
-            title: "Delete Category",
-            message: "Are you sure you want to remove this category?",
-            onConfirm: () => {
-              setCategories(cs => cs.filter(c => c.id !== id));
-              setConfirmDialog(null);
-            }
-          });
-        }} />;
+      case "categories":
+        return (
+          <CategoriesScreen
+            categories={categories}
+            onAdd={saveCategory}
+            onDelete={deleteCategory}
+          />
+        );
       case "sheet":
         return <SheetScreen
           transactions={transactions}
