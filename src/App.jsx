@@ -8,6 +8,9 @@ import {
   orderBy, serverTimestamp, updateDoc, increment, deleteDoc
 } from "firebase/firestore";
 import * as XLSX from 'xlsx';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { FileOpener } from '@capawesome-team/capacitor-file-opener';
+import { motion, AnimatePresence } from "framer-motion";
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -1351,42 +1354,89 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
   }, [transactions, accounts, currentMonth]);
 
   // 2. Export to Excel Function
-  const exportToExcel = () => {
-    const exportData = ledgerData.map(row => {
-      const cat = categories.find(c => c.id === row.categoryId);
-      const acc = accounts.find(a => a.id === row.accountId);
+  const exportToExcel = async () => {
+    try {
+      const exportData = ledgerData.map(row => {
+        const cat = categories.find(c => c.id === row.categoryId);
+        const acc = accounts.find(a => a.id === row.accountId);
 
-      // Determine if amount goes in the "In" or "Out" column
-      let inVal = "";
-      let outVal = "";
+        // Determine if amount goes in the "In" or "Out" column
+        let inVal = "";
+        let outVal = "";
 
-      if (row.type === "income" || (row.type === "opening" && row.amount >= 0)) {
-        inVal = Math.abs(row.amount);
-      } else if (row.type === "expense" || (row.type === "opening" && row.amount < 0)) {
-        outVal = Math.abs(row.amount);
-      }
+        if (row.type === "income" || (row.type === "opening" && row.amount >= 0)) {
+          inVal = Math.abs(row.amount);
+        } else if (row.type === "expense" || (row.type === "opening" && row.amount < 0)) {
+          outVal = Math.abs(row.amount);
+        }
 
-      const rowData = {
-        Date: row.date,
-        Info: row.note || cat?.name || "Transaction",
-        Account: acc?.name || "—",
-        In: inVal,
-        Out: outVal,
-        "Total Bal": row.runTotal,
-      };
+        const rowData = {
+          Date: row.date,
+          Info: row.note || cat?.name || "Transaction",
+          Account: acc?.name || "—",
+          In: inVal,
+          Out: outVal,
+          "Total Bal": row.runTotal,
+        };
 
-      // Dynamically add a column for every bank
-      accounts.forEach(a => {
-        rowData[a.name] = row.runAccounts[a.id] || 0;
+        // Dynamically add a column for every bank
+        accounts.forEach(a => {
+          rowData[a.name] = row.runAccounts[a.id] || 0;
+        });
+
+        return rowData;
       });
 
-      return rowData;
-    });
+      // 1. Create the worksheet from your JSON data
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, displayDate);
-    XLSX.writeFile(workbook, `Ledger_${currentMonth}.xlsx`);
+      // 2. Define the columns you want to measure
+      const objectKeys = Object.keys(exportData[0]);
+
+      // 3. Calculate the maximum length for each column
+      const colWidths = objectKeys.map(key => {
+        // Find the longest string in this column
+        const maxChar = exportData.reduce((acc, row) => {
+          const val = row[key] ? row[key].toString() : "";
+          return Math.max(acc, val.length);
+        }, key.length); // Start with the header length
+
+        return { wch: maxChar + 2 }; // Add a little extra padding (2 chars)
+      });
+
+      // 4. Apply the widths to the worksheet
+      worksheet['!cols'] = colWidths;
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, displayDate);
+
+      // 1. Generate the Excel binary data
+      const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+
+      // 2. Convert to Base64 (Required for Capacitor Filesystem)
+      const base64Data = btoa(
+        new Uint8Array(excelBuffer)
+          .reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+
+      const fileName = `Ledger_${currentMonth}.xlsx`;
+
+      // 3. Write file to the Documents directory on the phone
+      const savedFile = await Filesystem.writeFile({
+        path: fileName,
+        data: base64Data,
+        directory: Directory.Documents,
+      });
+
+      // 4. Open the file immediately so the user can save/view it
+      await FileOpener.openFile({
+        path: savedFile.uri,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+
+    } catch (error) {
+      console.error("Export failed:", error);
+      alert("Could not export file: " + error.message);
+    }
   };
 
   return (
@@ -1468,6 +1518,18 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
     </div>
   );
 }
+
+const PageTransition = ({ children, k }) => (
+  <motion.div
+    key={k}
+    initial={{ opacity: 0, y: 10 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, y: -10 }}
+    transition={{ duration: 0.4, ease: "easeOut" }}
+  >
+    {children}
+  </motion.div>
+);
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function PocketLedger() {
@@ -1998,41 +2060,65 @@ export default function PocketLedger() {
         </div>
       </div>
 
-      {drawerOpen && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }} onClick={() => setDrawerOpen(false)}>
-          <div onClick={e => e.stopPropagation()} style={{
-            width: 260, background: COLORS.card, borderRight: `1px solid ${COLORS.border}`,
-            padding: 24, display: "flex", flexDirection: "column", gap: 4
-          }}>
-            <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},#2af)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>₹</div>
-              PocketLedger
-            </div>
-            {DRAWER_ITEMS.map(item => (
-              <button key={item.id} onClick={() => { setActiveTab(item.id); setDrawerOpen(false); }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12,
-                  background: activeTab === item.id ? COLORS.accentDim : "transparent",
-                  border: `1px solid ${activeTab === item.id ? COLORS.accent + "44" : "transparent"}`,
-                  color: activeTab === item.id ? COLORS.accent : COLORS.textSub,
-                  fontWeight: 600, fontSize: 14, cursor: "pointer", textAlign: "left"
-                }}>
-                <span style={{ fontSize: 18 }}>{item.icon}</span> {item.label}
-              </button>
-            ))}
-            <div style={{ flex: 1 }} />
-            <div style={{ color: COLORS.textMuted, fontSize: 11, textAlign: "center", marginTop: 20 }}>
-              Firebase sync enabled ☁️
-            </div>
+      <AnimatePresence>
+        {drawerOpen && (
+          <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }}>
+            {/* 1. Animated Backdrop (Dimming Effect) */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDrawerOpen(false)}
+              style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+            />
+
+            {/* 2. Animated Sidebar (Slide Effect) */}
+            <motion.div
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              onClick={e => e.stopPropagation()}
+              style={{
+                position: "relative", width: 260, height: "100%", background: COLORS.card,
+                borderRight: `1px solid ${COLORS.border}`, padding: 24, display: "flex",
+                flexDirection: "column", gap: 4, boxShadow: "20px 0 50px rgba(0,0,0,0.5)"
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},#2af)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>₹</div>
+                Mee-Zaan
+              </div>
+
+              {DRAWER_ITEMS.map(item => (
+                <button key={item.id} onClick={() => { setActiveTab(item.id); setDrawerOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12,
+                    background: activeTab === item.id ? COLORS.accentDim : "transparent",
+                    border: `1px solid ${activeTab === item.id ? COLORS.accent + "44" : "transparent"}`,
+                    color: activeTab === item.id ? COLORS.accent : COLORS.textSub,
+                    fontWeight: 600, fontSize: 14, cursor: "pointer", textAlign: "left"
+                  }}>
+                  <span style={{ fontSize: 18 }}>{item.icon}</span> {item.label}
+                </button>
+              ))}
+
+              <div style={{ flex: 1 }} />
+              <div style={{ color: COLORS.textMuted, fontSize: 11, textAlign: "center", marginTop: 20 }}>
+                Firebase sync enabled ☁️
+              </div>
+            </motion.div>
           </div>
-          <div style={{ flex: 1, background: "rgba(0,0,0,0.5)" }} />
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "20px 16px 100px" }}>
-        {renderScreen()}
+        <AnimatePresence mode="wait">
+          <PageTransition k={activeTab}>
+            {renderScreen()}
+          </PageTransition>
+        </AnimatePresence>
       </div>
-
       <div style={{
         position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100,
         background: COLORS.card + "ee", backdropFilter: "blur(16px)",
