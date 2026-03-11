@@ -1933,12 +1933,17 @@ export default function PocketLedger() {
           border: "1px solid rgba(255,255,255,0.06)", boxShadow: "0 40px 80px rgba(0,0,0,0.7)", textAlign: "center"
         }}>
 
-          <div style={{
-            width: "70px", height: "70px", margin: "0 auto 20px", borderRadius: "20px",
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: "32px",
-            color: "#0b0f19", background: "linear-gradient(135deg,#14b8a6,#06b6d4)",
-            boxShadow: "0 12px 35px rgba(20,184,166,0.45)"
-          }}>₹</div>
+          <img
+            src="pocketLedger.png"
+            alt="Mee-Zaan Logo"
+            style={{
+              width: "80px",
+              height: "80px",
+              borderRadius: "22px",
+              boxShadow: "0 12px 35px rgba(0,0,0,0.3)",
+              objectFit: "cover"
+            }}
+          />
 
           <h1 style={{ fontSize: "28px", fontWeight: "800", letterSpacing: "-0.03em", color: "#f1f5f9", marginBottom: "8px" }}>
             Mee-Zaan
@@ -2042,11 +2047,17 @@ export default function PocketLedger() {
             ☰
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},${COLORS.income})`,
-              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16
-            }}>₹</div>
-            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>PocketLedger</span>
+            <img
+              src="pocketLedger.png"
+              alt="Mee-Zaan Logo"
+              style={{
+                width: "40px",
+                height: "40px",
+                boxShadow: "0 12px 35px rgba(0,0,0,0.3)",
+                objectFit: "cover"
+              }}
+            />
+            <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>Mee-Zaan</span>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -2086,7 +2097,16 @@ export default function PocketLedger() {
               }}
             >
               <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg,${COLORS.accent},#2af)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>₹</div>
+                <img
+                  src="pocketLedger.png"
+                  alt="Mee-Zaan Logo"
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    boxShadow: "0 12px 35px rgba(0,0,0,0.3)",
+                    objectFit: "cover"
+                  }}
+                />
                 Mee-Zaan
               </div>
 
