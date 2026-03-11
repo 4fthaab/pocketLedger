@@ -378,7 +378,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={lineData}>
               <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} tickFormatter={v => v > 0 ? "₹" + v / 1000 + "k" : ""} />
+              <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} tickFormatter={v => v > 0 ? "₹" + v : ""} />
               <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} />
               <Line type="monotone" dataKey="income" stroke={COLORS.income} strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="expense" stroke={COLORS.expense} strokeWidth={2} dot={false} />
@@ -428,7 +428,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={fullMonthLineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                   <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={50} tickFormatter={v => v > 0 ? "₹" + v / 1000 + "k" : ""} />
+                  <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={70} tickFormatter={v => v > 0 ? "₹" + v : ""} />
 
                   {/* Tooltip uses fullDate so you know exactly what day you are hovering */}
                   <Tooltip
@@ -1993,53 +1993,11 @@ export default function PocketLedger() {
       `}</style>
 
       <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "16px",
-        background: COLORS.card,
-        borderRadius: "20px",
-        border: `1px solid ${COLORS.border}`,
-        marginBottom: "24px"
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ position: "relative" }}>
-            <img
-              src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
-              width="44"
-              height="44"
-              style={{ borderRadius: "14px", objectFit: "cover", border: `2px solid ${COLORS.border}` }}
-              alt="profile"
-            />
-            <div style={{
-              position: "absolute", bottom: -2, right: -2, width: 14, height: 14,
-              background: COLORS.income, border: `3px solid ${COLORS.card}`, borderRadius: "50%"
-            }} />
-          </div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 15 }}>{user.displayName}</span>
-            <span style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase" }}>
-              Personal Wallet
-            </span>
-          </div>
-        </div>
-
-        <button onClick={logout} style={{
-          background: COLORS.expenseDim, border: `1px solid ${COLORS.expense}33`,
-          color: COLORS.expense, padding: "8px 16px", borderRadius: "10px",
-          fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all 0.2s"
-        }}
-          onMouseEnter={e => e.currentTarget.style.background = COLORS.expense + "33"}
-          onMouseLeave={e => e.currentTarget.style.background = COLORS.expenseDim}
-        >
-          Sign Out
-        </button>
-      </div>
-
-      <div style={{
-        position: "sticky", top: 0, zIndex: 100, background: COLORS.bg + "dd",
+        position: "sticky", top: 0, zIndex: 100, background: COLORS.bg + "ee",
         backdropFilter: "blur(12px)", borderBottom: `1px solid ${COLORS.border}`,
-        padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center"
+        // Use padding that respects the mobile safe area
+        padding: "max(14px, env(safe-area-inset-top) + 14px) 20px 14px 20px",
+        display: "flex", justifyContent: "space-between", alignItems: "center"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button onClick={() => setDrawerOpen(v => !v)}
@@ -2092,40 +2050,63 @@ export default function PocketLedger() {
               onClick={e => e.stopPropagation()}
               style={{
                 position: "relative", width: 260, height: "100%", background: COLORS.card,
-                borderRight: `1px solid ${COLORS.border}`, padding: 24, display: "flex",
+                borderRight: `1px solid ${COLORS.border}`, padding: "24px 16px", display: "flex",
                 flexDirection: "column", gap: 4, boxShadow: "20px 0 50px rgba(0,0,0,0.5)"
               }}
             >
-              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                <img
-                  src="pocketLedger.png"
-                  alt="Mee-Zaan Logo"
-                  style={{
-                    width: "40px",
-                    height: "40px",
-                    boxShadow: "0 12px 35px rgba(0,0,0,0.3)",
-                    objectFit: "cover"
-                  }}
-                />
+              {/* --- TOP: LOGO --- */}
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 20, padding: "0 8px", display: "flex", alignItems: "center", gap: 10 }}>
+                <img src="pocketLedger.png" alt="Mee-Zaan Logo" style={{ width: "36px", height: "36px", borderRadius: "10px", objectFit: "cover" }} />
                 Mee-Zaan
               </div>
 
-              {DRAWER_ITEMS.map(item => (
-                <button key={item.id} onClick={() => { setActiveTab(item.id); setDrawerOpen(false); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12,
-                    background: activeTab === item.id ? COLORS.accentDim : "transparent",
-                    border: `1px solid ${activeTab === item.id ? COLORS.accent + "44" : "transparent"}`,
-                    color: activeTab === item.id ? COLORS.accent : COLORS.textSub,
-                    fontWeight: 600, fontSize: 14, cursor: "pointer", textAlign: "left"
-                  }}>
-                  <span style={{ fontSize: 18 }}>{item.icon}</span> {item.label}
-                </button>
-              ))}
+              {/* --- MIDDLE: NAVIGATION --- */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                {DRAWER_ITEMS.map(item => (
+                  <button key={item.id} onClick={() => { setActiveTab(item.id); setDrawerOpen(false); }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12,
+                      background: activeTab === item.id ? COLORS.accentDim : "transparent",
+                      border: `1px solid ${activeTab === item.id ? COLORS.accent + "44" : "transparent"}`,
+                      color: activeTab === item.id ? COLORS.accent : COLORS.textSub,
+                      fontWeight: 600, fontSize: 14, cursor: "pointer", textAlign: "left", transition: "all 0.2s"
+                    }}>
+                    <span style={{ fontSize: 18 }}>{item.icon}</span> {item.label}
+                  </button>
+                ))}
+              </div>
 
-              <div style={{ flex: 1 }} />
-              <div style={{ color: COLORS.textMuted, fontSize: 11, textAlign: "center", marginTop: 20 }}>
-                Firebase sync enabled ☁️
+              {/* --- BOTTOM: PROFILE & LOGOUT --- */}
+              <div style={{ marginTop: "auto", paddingTop: 20, borderTop: `1px solid ${COLORS.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 8px", marginBottom: 16 }}>
+                  <img
+                    src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
+                    width="38" height="38"
+                    style={{ borderRadius: "10px", objectFit: "cover", border: `2px solid ${COLORS.border}` }}
+                    alt="profile"
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                    <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {user.displayName}
+                    </span>
+                    <span style={{ color: COLORS.textMuted, fontSize: 10, fontWeight: 600, textTransform: "uppercase" }}>
+                      Personal Wallet
+                    </span>
+                  </div>
+                </div>
+
+                <button onClick={logout} style={{
+                  width: "100%", background: COLORS.expenseDim, border: `1px solid ${COLORS.expense}33`,
+                  color: COLORS.expense, padding: "12px", borderRadius: "12px",
+                  fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.2s",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8
+                }}>
+                  Sign Out
+                </button>
+
+                <div style={{ color: COLORS.textMuted, fontSize: 9, textAlign: "center", marginTop: 12, letterSpacing: "0.05em" }}>
+                  FIREBASE SYNC ENABLED ☁️
+                </div>
               </div>
             </motion.div>
           </div>
