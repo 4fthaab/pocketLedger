@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Area, XAxis, YAxis, Tooltip, LineChart, AreaChart, Line, ResponsiveContainer } from "recharts";
 import { auth, db } from "./firebase";
 import { Browser } from "@capacitor/browser";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, onAuthStateChanged, signOut } from "firebase/auth";
@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import { motion, AnimatePresence } from "framer-motion";
+// import { NativeBiometric } from 'capacitor-native-biometric';
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -222,33 +223,47 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
     const d = new Date();
     d.setDate(today.getDate() - i);
     const key = d.toISOString().split("T")[0];
-    const dayTxns = txns.filter(t => t.date === key);
+
+    // Calculate cumulative balance up to THIS specific day
+    const historicalTxns = transactions.filter(t => !t.isDeleted && t.date <= key);
+    const dailyBalance = historicalTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
 
     lineData.push({
-      day: key.slice(-2),
-      income: dayTxns.filter(t => t.type === "income" && !t.note?.includes("Transfer"))
-        .reduce((s, t) => s + t.amount, 0),
-      expense: dayTxns.filter(t => t.type === "expense" && !t.note?.includes("Transfer"))
-        .reduce((s, t) => s + t.amount, 0),
+      day: key.slice(-2), // Shows the date (e.g., "12")
+      balance: dailyBalance,
     });
   }
 
   const fullMonthLineData = [];
   const [year, month] = currentMonth.split("-").map(Number);
-  const daysInMonth = new Date(year, month, 0).getDate(); // Gets total days in the month
+  const daysInMonth = new Date(year, month, 0).getDate();
 
+  // 1. Calculate the starting point (Closing balance of all previous months)
+  const prevTxns = transactions.filter(t => !t.isDeleted && t.date.slice(0, 7) < currentMonth);
+  let runningTotal = prevTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
+
+  // 2. Add "Day 0" as the baseline (Previous Month Closing)
+  fullMonthLineData.push({
+    day: "00",
+    fullDate: "Previous Month Closing",
+    balance: runningTotal,
+  });
+
+  // 3. Loop through each day of the current month
   for (let i = 1; i <= daysInMonth; i++) {
     const dayString = String(i).padStart(2, '0');
     const key = `${currentMonth}-${dayString}`;
+
     const dayTxns = txns.filter(t => t.date === key);
+    const dayIncome = dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+    const dayExpense = dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+
+    runningTotal += (dayIncome - dayExpense);
 
     fullMonthLineData.push({
       day: dayString,
       fullDate: key,
-      income: dayTxns.filter(t => t.type === "income" && !t.note?.includes("Transfer"))
-        .reduce((s, t) => s + t.amount, 0),
-      expense: dayTxns.filter(t => t.type === "expense" && !t.note?.includes("Transfer"))
-        .reduce((s, t) => s + t.amount, 0),
+      balance: runningTotal,
     });
   }
 
@@ -399,15 +414,32 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
         </Card>
 
         <Card onClick={() => setShowFullChartModal(true)}>
-          <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>📈 Daily Cash Flow</div>
+          <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>📈 Balance Trend (Last 7 Days)</div>
           <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={lineData}>
+            <AreaChart data={lineData}>
+              <defs>
+                <linearGradient id="colorBalPreview" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLORS.accent} stopOpacity={0.2} />
+                  <stop offset="95%" stopColor={COLORS.accent} stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={40} tickFormatter={v => v > 0 ? "₹" + v : ""} />
-              <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} />
-              <Line type="monotone" dataKey="income" stroke={COLORS.income} strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="expense" stroke={COLORS.expense} strokeWidth={2} dot={false} />
-            </LineChart>
+              <YAxis hide domain={['auto', 'auto']} />
+              <Tooltip
+                formatter={v => fmt(v)}
+                contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }}
+                itemStyle={{ color: COLORS.accent }}
+              />
+              <Area
+                type="monotone"
+                dataKey="balance"
+                stroke={COLORS.accent}
+                strokeWidth={2}
+                fillOpacity={1}
+                fill="url(#colorBalPreview)"
+                dot={false}
+              />
+            </AreaChart>
           </ResponsiveContainer>
         </Card>
       </div>
@@ -431,16 +463,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
       {/* ADD THIS MODAL AT THE END OF THE DASHBOARD RETURN */}
       {showFullChartModal && (
         <Modal title={`Cash Flow: ${displayDate}`} onClose={() => setShowFullChartModal(false)}>
-
-          <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: COLORS.textMuted }}>
-              <span style={{ color: COLORS.income, fontWeight: 800 }}>●</span> Income
-            </div>
-            <div style={{ fontSize: 12, color: COLORS.textMuted }}>
-              <span style={{ color: COLORS.expense, fontWeight: 800 }}>●</span> Expense
-            </div>
-          </div>
-
           {/* Scrollable Container */}
           <div style={{
             width: "100%",
@@ -451,20 +473,44 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
             {/* The inner div is forced to be wider than the screen to create scrolling */}
             <div style={{ width: Math.max(600, daysInMonth * 35), height: 300 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={fullMonthLineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} width={70} tickFormatter={v => v > 0 ? "₹" + v : ""} />
-
-                  {/* Tooltip uses fullDate so you know exactly what day you are hovering */}
+                <AreaChart data={fullMonthLineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorBal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={COLORS.accent} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={COLORS.accent} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fill: COLORS.textMuted, fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    hide={false}
+                    domain={['auto', 'auto']}
+                    tick={{ fill: COLORS.textMuted, fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={70}
+                    tickFormatter={v => "₹" + v.toLocaleString('en-IN')}
+                  />
                   <Tooltip
                     labelFormatter={(label, payload) => payload?.[0]?.payload?.fullDate || label}
-                    formatter={v => fmt(v)}
-                    contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }}
+                    formatter={v => [fmt(v), "Balance"]}
+                    contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 12, color: COLORS.text }}
                   />
-
-                  <Line type="monotone" dataKey="income" stroke={COLORS.income} strokeWidth={2} dot={{ r: 3, fill: COLORS.income }} activeDot={{ r: 6 }} />
-                  <Line type="monotone" dataKey="expense" stroke={COLORS.expense} strokeWidth={2} dot={{ r: 3, fill: COLORS.expense }} activeDot={{ r: 6 }} />
-                </LineChart>
+                  <Area
+                    type="monotone"
+                    dataKey="balance"
+                    stroke={COLORS.accent}
+                    strokeWidth={3}
+                    fillOpacity={1}
+                    fill="url(#colorBal)"
+                    connectNulls
+                    animationDuration={1000}
+                  />
+                </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
@@ -1635,6 +1681,39 @@ export default function PocketLedger() {
   const [authError, setAuthError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
+  //biometric uncomment next mobile build
+  // // Inside your component...
+  // const [isLocked, setIsLocked] = useState(true);
+
+  // const performBiometricAuth = async () => {
+  //   try {
+  //     const result = await NativeBiometric.isAvailable();
+
+  //     if (result.isAvailable) {
+  //       const authResult = await NativeBiometric.verifyIdentity({
+  //         reason: "Unlock Mee-Zaan",
+  //         title: "Biometric Login",
+  //         subtitle: "Use your fingerprint to continue",
+  //         description: "Your financial data is protected.",
+  //       });
+
+  //       setIsLocked(false); // Unlock the app on success
+  //     } else {
+  //       setIsLocked(false); // No fingerprint set up, just let them in
+  //     }
+  //   } catch (error) {
+  //     console.error("Auth failed", error);
+  //     // You can handle "Cancel" or "Failed" here (e.g., show a 'Retry' button)
+  //   }
+  // };
+
+  // // Run auth when user is logged in
+  // useEffect(() => {
+  //   if (user) {
+  //     performBiometricAuth();
+  //   }
+  // }, [user]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
@@ -2095,6 +2174,22 @@ export default function PocketLedger() {
       </div>
     );
   }
+
+  //biometric uncomment next mobile build
+  // if (user && isLocked) {
+  //   return (
+  //     <div style={{
+  //       height: '100vh', background: COLORS.bg, display: 'flex',
+  //       flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+  //     }}>
+  //       <img src="pocketLedger.png" width="80" height="80" style={{ borderRadius: 20, marginBottom: 20 }} />
+  //       <h2 style={{ color: COLORS.text }}>Mee-Zaan is Locked</h2>
+  //       <Btn onClick={performBiometricAuth} style={{ marginTop: 20 }}>
+  //         Tap to Unlock
+  //       </Btn>
+  //     </div>
+  //   );
+  // }
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg, fontFamily: "'Plus Jakarta Sans','Segoe UI',sans-serif", color: COLORS.text }}>

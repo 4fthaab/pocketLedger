@@ -19,3 +19,23 @@ html, body, #root {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+/* Disable the focus outline on SVG elements globally */
+svg:focus {
+  outline: none !important;
+}
+
+path:focus {
+  outline: none !important;
+}
+
+/* Specific to Recharts components */
+.recharts-active-dot, 
+.recharts-pie-sector:focus {
+  outline: none !important;
+}

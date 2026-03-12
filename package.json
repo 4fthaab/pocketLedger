@@ -17,6 +17,7 @@
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/status-bar": "^8.0.1",
     "@capawesome-team/capacitor-file-opener": "^8.0.1",
+    "capacitor-native-biometric": "^4.2.2",
     "firebase": "^12.9.0",
     "framer-motion": "^12.35.2",
     "react": "^19.2.0",
