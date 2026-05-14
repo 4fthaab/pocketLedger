@@ -1750,6 +1750,42 @@ export default function PocketLedger() {
     return () => unsubscribe();
   }, [user]);
 
+  // --- SILENT WIDGET UPDATER ---
+  useEffect(() => {
+    // Only run if we have a user and transactions to calculate
+    if (!user || transactions.length === 0) return;
+
+    const updateWidgetData = async () => {
+      const balancesMap = {};
+      let totalLiquid = 0;
+
+      // Calculate all-time balances for each account
+      accounts.forEach(acc => {
+        const accTxns = transactions.filter(t => !t.isDeleted && t.accountId === acc.id);
+        const bal = accTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
+
+        // Use the ID as the key for easy widget access
+        balancesMap[acc.id] = bal;
+        totalLiquid += bal;
+      });
+
+      try {
+        const balanceRef = doc(db, "users", user.uid, "balances", "current");
+        await setDoc(balanceRef, {
+          ...balancesMap,
+          total_liquid: totalLiquid,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        console.log("Widget balances updated successfully");
+      } catch (e) {
+        console.error("Widget sync failed:", e);
+      }
+    };
+
+    updateWidgetData();
+  }, [user, transactions, accounts]);
+
   useEffect(() => {
     if (!user) return;
     const q = collection(db, "users", user.uid, "people");
