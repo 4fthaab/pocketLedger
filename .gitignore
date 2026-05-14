@@ -24,3 +24,4 @@ src/firebase.js
 *.njsproj
 *.sln
 *.sw?
+*google-service.json
