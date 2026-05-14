@@ -11,7 +11,9 @@ import * as XLSX from 'xlsx';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import { motion, AnimatePresence } from "framer-motion";
-// import { NativeBiometric } from 'capacitor-native-biometric';
+import { Capacitor } from '@capacitor/core';
+import { NativeBiometric } from 'capacitor-native-biometric';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -1681,38 +1683,35 @@ export default function PocketLedger() {
   const [authError, setAuthError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-  //biometric uncomment next mobile build
-  // // Inside your component...
-  // const [isLocked, setIsLocked] = useState(true);
+  const [isLocked, setIsLocked] = useState(Capacitor.isNativePlatform());
 
-  // const performBiometricAuth = async () => {
-  //   try {
-  //     const result = await NativeBiometric.isAvailable();
+  const performBiometricAuth = async () => {
+    try {
+      const result = await NativeBiometric.isAvailable();
 
-  //     if (result.isAvailable) {
-  //       const authResult = await NativeBiometric.verifyIdentity({
-  //         reason: "Unlock Mee-Zaan",
-  //         title: "Biometric Login",
-  //         subtitle: "Use your fingerprint to continue",
-  //         description: "Your financial data is protected.",
-  //       });
+      if (result.isAvailable) {
+        const authResult = await NativeBiometric.verifyIdentity({
+          reason: "Unlock Mee-Zaan",
+          title: "Biometric Login",
+          subtitle: "Use your fingerprint to continue",
+          description: "Your financial data is protected.",
+        });
 
-  //       setIsLocked(false); // Unlock the app on success
-  //     } else {
-  //       setIsLocked(false); // No fingerprint set up, just let them in
-  //     }
-  //   } catch (error) {
-  //     console.error("Auth failed", error);
-  //     // You can handle "Cancel" or "Failed" here (e.g., show a 'Retry' button)
-  //   }
-  // };
+        setIsLocked(false); // Unlock the app on success
+      } else {
+        setIsLocked(false); // No fingerprint set up, just let them in
+      }
+    } catch (error) {
+      console.error("Auth failed", error);
+      // You can handle "Cancel" or "Failed" here (e.g., show a 'Retry' button)
+    }
+  };
 
-  // // Run auth when user is logged in
-  // useEffect(() => {
-  //   if (user) {
-  //     performBiometricAuth();
-  //   }
-  // }, [user]);
+  useEffect(() => {
+    if (user && Capacitor.isNativePlatform()) {
+      performBiometricAuth();
+    }
+  }, [user]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -1785,6 +1784,46 @@ export default function PocketLedger() {
 
     updateWidgetData();
   }, [user, transactions, accounts]);
+
+  useEffect(() => {
+    const setupReminders = async () => {
+      // 1. Request permission (Required for Android 13+)
+      const permission = await LocalNotifications.requestPermissions();
+      if (permission.display !== 'granted') return;
+
+      // 2. Clear existing to prevent duplicates
+      const pending = await LocalNotifications.getPending();
+      if (pending.notifications.length > 0) {
+        await LocalNotifications.cancel(pending);
+      }
+
+      // 3. Schedule 2:00 PM and 9:00 PM reminders
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title: "💰 Time to Sync!",
+            body: "Don't forget to add your afternoon expenses to Mee-Zaan.",
+            id: 1400,
+            schedule: { on: { hour: 14, minute: 0 }, repeats: true },
+            sound: null,
+            actionTypeId: "",
+            extra: null
+          },
+          {
+            title: "🌙 Daily Wrap-up",
+            body: "Ready to close the day? Add your final expenses now.",
+            id: 2100,
+            schedule: { on: { hour: 21, minute: 0 }, repeats: true },
+            sound: null,
+            actionTypeId: "",
+            extra: null
+          }
+        ]
+      });
+    };
+
+    if (user) setupReminders();
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -2212,20 +2251,20 @@ export default function PocketLedger() {
   }
 
   //biometric uncomment next mobile build
-  // if (user && isLocked) {
-  //   return (
-  //     <div style={{
-  //       height: '100vh', background: COLORS.bg, display: 'flex',
-  //       flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
-  //     }}>
-  //       <img src="pocketLedger.png" width="80" height="80" style={{ borderRadius: 20, marginBottom: 20 }} />
-  //       <h2 style={{ color: COLORS.text }}>Mee-Zaan is Locked</h2>
-  //       <Btn onClick={performBiometricAuth} style={{ marginTop: 20 }}>
-  //         Tap to Unlock
-  //       </Btn>
-  //     </div>
-  //   );
-  // }
+  if (user && isLocked) {
+    return (
+      <div style={{
+        height: '100vh', background: COLORS.bg, display: 'flex',
+        flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+      }}>
+        <img src="pocketLedger.png" width="80" height="80" style={{ borderRadius: 20, marginBottom: 20 }} />
+        <h2 style={{ color: COLORS.text }}>Mee-Zaan is Locked</h2>
+        <Btn onClick={performBiometricAuth} style={{ marginTop: 20 }}>
+          Tap to Unlock
+        </Btn>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg, fontFamily: "'Plus Jakarta Sans','Segoe UI',sans-serif", color: COLORS.text }}>

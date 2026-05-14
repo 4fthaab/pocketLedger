@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D0F14"
+    android:padding="8dp"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:baselineAligned="false">
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:gravity="center" android:padding="2dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SBI" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
+            <TextView android:id="@+id/val_sbi" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:gravity="center" android:padding="2dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="FEDERAL" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
+            <TextView android:id="@+id/val_federal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:gravity="center" android:padding="2dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CASH" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
+            <TextView android:id="@+id/val_cash" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:gravity="center" android:padding="2dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TOTAL" android:textColor="#4FFFB0" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
+            <TextView android:id="@+id/val_total" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#4FFFB0" android:textSize="15sp" android:textStyle="bold" android:layout_marginTop="2dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <TextView android:id="@+id/timestamp" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:gravity="center" android:text="Last sync: --:--" android:textColor="#444444" android:textSize="8sp" />
+</LinearLayout>

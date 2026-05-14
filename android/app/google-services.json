@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "470935586540",
+    "project_id": "pocketledger-4fd7d",
+    "storage_bucket": "pocketledger-4fd7d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:470935586540:android:018ab245344fc6455247c9",
+        "android_client_info": {
+          "package_name": "com.afthab.meezaan"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "470935586540-aotsmi3d89cjubkqfl7011035la54c2v.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBa6FXA1hchlqw3-u6wm58AsnIaue2IAoc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "470935586540-aotsmi3d89cjubkqfl7011035la54c2v.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
