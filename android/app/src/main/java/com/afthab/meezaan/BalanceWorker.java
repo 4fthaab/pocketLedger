@@ -23,7 +23,7 @@ public class BalanceWorker extends Worker {
     public Result doWork() {
         // 1. Check Time Window: 11 AM to 9 PM
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
-        if (hour < 11 || hour > 21) return Result.success();
+        if (hour < 4 || hour > 22) return Result.success();
 
         FirebaseAuth auth = FirebaseAuth.getInstance();
         
@@ -80,17 +80,25 @@ public class BalanceWorker extends Worker {
 
     private void updateUI(Double sbi, Double fed, Double cash, Double total) {
         Context context = getApplicationContext();
-        RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_layout);
-        
+        String time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date());
+        AppWidgetManager wm = AppWidgetManager.getInstance(context);
+
+        // Update the 1x4 Ticker Widget if it exists on screen
+        RemoteViews views1x4 = new RemoteViews(context.getPackageName(), R.layout.widget_layout);
+        setupViews(views1x4, sbi, fed, cash, total, time);
+        wm.updateAppWidget(new ComponentName(context, MeeZaanWidget.class), views1x4);
+
+        // Update the 2x2 Grid Widget if it exists on screen
+        RemoteViews views2x2 = new RemoteViews(context.getPackageName(), R.layout.widget_layout_2x2);
+        setupViews(views2x2, sbi, fed, cash, total, time);
+        wm.updateAppWidget(new ComponentName(context, MeeZaanWidget2x2.class), views2x2);
+    }
+
+    private void setupViews(RemoteViews views, Double sbi, Double fed, Double cash, Double total, String time) {
         views.setTextViewText(R.id.val_sbi, "₹" + sbi.intValue());
         views.setTextViewText(R.id.val_federal, "₹" + fed.intValue());
         views.setTextViewText(R.id.val_cash, "₹" + cash.intValue());
         views.setTextViewText(R.id.val_total, "₹" + total.intValue());
-        
-        String time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date());
         views.setTextViewText(R.id.timestamp, "Last sync: " + time);
-
-        AppWidgetManager.getInstance(context).updateAppWidget(
-            new ComponentName(context, MeeZaanWidget.class), views);
     }
 }

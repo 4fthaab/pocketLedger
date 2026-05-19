@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D0F14"
+    android:padding="12dp"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:padding="8dp" android:gravity="center_vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="🏛️ SBI" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/val_sbi" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="15sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:padding="8dp" android:gravity="center_vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="🏦 FED" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/val_federal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="15sp" android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:padding="8dp" android:gravity="center_vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="💵 Cash" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/val_cash" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="15sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:padding="8dp" android:gravity="center_vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Total" android:textColor="#4FFFB0" android:textSize="10sp" android:textStyle="bold" />
+            <TextView android:id="@+id/val_total" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#4FFFB0" android:textSize="18sp" android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView android:id="@+id/timestamp" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:gravity="end" android:text="Last sync: --:--" android:textColor="#333333" android:textSize="8sp" android:layout_marginTop="4dp"/>
+</LinearLayout>
