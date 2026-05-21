@@ -25,3 +25,5 @@ src/firebase.js
 *.sln
 *.sw?
 *google-service.json
+cred.json
+backup.json
