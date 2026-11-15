@@ -67,6 +67,41 @@ function Card({ children, style = {}, onClick }) {
   );
 }
 
+function MonthNavigator({ currentMonth, onMonthChange, title }) {
+  const displayDate = new Date(currentMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" });
+
+  const handleMonthChange = (offset) => {
+    const [year, month] = currentMonth.split("-").map(Number);
+    const date = new Date(year, (month - 1) + offset, 1);
+    const nextYear = date.getFullYear();
+    const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+    onMonthChange(`${nextYear}-${nextMonth}`);
+  };
+
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", background: COLORS.card, borderRadius: 12, border: `1px solid ${COLORS.border}`, padding: "4px" }}>
+        <button
+          onClick={() => handleMonthChange(-1)}
+          style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+        >
+          ←
+        </button>
+        <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 700, padding: "0 8px", minWidth: 110, textAlign: "center" }}>
+          {displayDate}
+        </span>
+        <button
+          onClick={() => handleMonthChange(1)}
+          style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+        >
+          →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Tag({ color, children }) {
   return (
     <span style={{ background: color + "20", color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
@@ -274,7 +309,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ color: COLORS.textMuted, fontSize: 12 }}>Financial Overview</div>
-          <div style={{ color: COLORS.text, fontWeight: 800, fontSize: 22 }}>Dashboard</div>
+          <div style={{ color: COLORS.text, fontWeight: 800, fontSize: 18 }}>Dashboard</div>
         </div>
 
         {/* Navigation UI */}
@@ -757,7 +792,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
   );
 }
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth }) {
+function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth, onMonthChange }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -808,12 +843,7 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>📋 Transactions</div>
-        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
-          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
-        </div>
-      </div>
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title="📋 Transactions" />
 
       <Card style={{ marginBottom: 16 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search (e.g., Food, Federal Bank)..."
@@ -929,7 +959,7 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>🤝 Dues</div>
+        <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>🤝 Dues</div>
         {/* <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn> */}
       </div>
 
@@ -953,7 +983,7 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
 }
 
 // ─── BALANCES (REPLACES BUDGET) ────────────────────────────────────────────────
-function BalancesScreen({ accounts, transactions, currentMonth }) {
+function BalancesScreen({ accounts, transactions, currentMonth, onMonthChange }) {
 
   // Calculate cumulative balance up to the end of the currently selected month
   const getAccountBalance = (accountId) => {
@@ -973,12 +1003,7 @@ function BalancesScreen({ accounts, transactions, currentMonth }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>💳 Accounts & Balances</div>
-        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
-          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
-        </div>
-      </div>
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title= "🏛️ Accounts" />
 
       <Card style={{ marginBottom: 20, textAlign: "center", padding: "24px 20px" }}>
         <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Total Liquid Funds</div>
@@ -1661,7 +1686,7 @@ export default function PocketLedger() {
 
   const [accounts, setAccounts] = useState([
     { id: "bank_secondary", name: "SBI", icon: "🏛️", color: "#0e3ba4" },
-    { id: "bank_primary", name: "Federal Bank", icon: "🏦", color: "#7EB8FF" },
+    { id: "bank_primary", name: "HDFC", icon: "🏦", color: "#9574e8" },
     { id: "cash", name: "Cash in Hand", icon: "💵", color: "#5de61e" },
   ]);
   const [categories, setCategories] = useState([]);
@@ -2104,11 +2129,12 @@ export default function PocketLedger() {
         onRestore={restoreTransaction}
         onEdit={t => { setEditTxn(t); setShowAddModal(true); }}
         accounts={accounts}
-        currentMonth={currentMonth} />;
+        currentMonth={currentMonth}
+        onMonthChange={setCurrentMonth} />;
       case "dues":
         return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
       case "balances":
-        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} />;
+        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
       case "goals":
         return (
           <GoalsScreen
