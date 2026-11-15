@@ -1646,6 +1646,7 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
         const rowData = {
           Date: row.date,
           Info: row.note || cat?.name || "Transaction",
+          "Sub-Category": row.subNote || "",
           Account: acc?.name || "—",
           In: inVal,
           Out: outVal,
@@ -1738,6 +1739,7 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
             <tr style={{ borderBottom: `1px solid ${COLORS.border}`, background: COLORS.bg, color: COLORS.textMuted }}>
               <th style={{ padding: "12px" }}>Date</th>
               <th style={{ padding: "12px" }}>Info</th>
+              <th style={{ padding: "12px" }}>Sub-Category</th>
               <th style={{ padding: "12px" }}>Account</th>
               <th style={{ padding: "12px", color: COLORS.income }}>In</th>
               <th style={{ padding: "12px", color: COLORS.expense }}>Out</th>
@@ -1757,6 +1759,9 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
                   <td style={{ padding: "12px", color: COLORS.textMuted }}>{row.date.slice(5)}</td>
                   <td style={{ padding: "12px", color: row.type === "opening" ? COLORS.textMuted : COLORS.text, fontStyle: row.type === "opening" ? "italic" : "normal" }}>
                     {row.note || "—"}
+                  </td>
+                  <td style={{ padding: "12px", color: COLORS.accent, fontSize: 12 }}>
+                    {row.subNote || "—"}
                   </td>
                   <td style={{ padding: "12px", color: COLORS.textSub }}>{acc?.name || "—"}</td>
 
