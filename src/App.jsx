@@ -382,22 +382,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
             {fmt(netWorth)}
           </div>
         </Card>
-
-        {/* TO RECEIVE */}
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TO RECEIVE</div>
-          <div style={{ color: COLORS.pending, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
-            {fmt(toReceive)}
-          </div>
-        </Card>
-
-        {/* I OWE */}
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>I OWE</div>
-          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
-            {fmt(iOwe)}
-          </div>
-        </Card>
       </div>
 
 
@@ -558,7 +542,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
 }
 
 // ─── ADD TRANSACTION ──────────────────────────────────────────────────────────
-function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editTxn, accounts }) {
+function AddTransaction({ categories, people, transactions = [], onAdd, onAddPerson, onClose, editTxn, accounts }) {
   const [type, setType] = useState(editTxn?.type || "expense");
   const [amount, setAmount] = useState(editTxn?.amount?.toString() || "");
   const [categoryId, setCategoryId] = useState(editTxn?.categoryId || categories[0]?.id || "");
@@ -568,12 +552,120 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
   const [personId, setPersonId] = useState(editTxn?.personId || "");
   const [newPersonName, setNewPersonName] = useState("");
   const [isRecurring, setIsRecurring] = useState(editTxn?.isRecurring || false);
+  const [subNote, setSubNote] = useState(editTxn?.subNote || "");
 
   // Account States
   const [accountId, setAccountId] = useState(editTxn?.accountId || accounts[0]?.id || "");
   const [toAccountId, setToAccountId] = useState(accounts[1]?.id || accounts[0]?.id || "");
 
   const allCats = categories;
+
+  // Comprehensive mapping dictionary extracted from your spreadsheet
+  const subCategoryMapping = {
+    // Rent
+    "rent aug": "Rent",
+
+    // Travel
+    "ksrtc": "KSRTC",
+    "train": "IRCTC",
+    "irctc wallet": "IRCTC",
+    "indianoil": "Petrol BLR",
+    "nayara": "Petrol BLR",
+    "bpcl": "Petrol BLR",
+    "shell": "Petrol BLR",
+    "hp": "Petrol BLR",
+    "bmtc egl": "BMTC to Work",
+    "uber": "Uber, Auto, Rapido",
+    "auto": "Uber, Auto, Rapido",
+    "rapido": "Uber, Auto, Rapido",
+    "taxi": "Uber, Auto, Rapido",
+
+    // Food - Misc Junk
+    "biscuit": "Misc Junk",
+    "toffee": "Misc Junk",
+    "lays": "Misc Junk",
+    "chocolate": "Misc Junk",
+    "7up": "Misc Junk",
+    "sprite": "Misc Junk",
+    "puffs": "Misc Junk",
+    "cutlet": "Misc Junk",
+    "tea": "Misc Junk",
+    "snacks": "Misc Junk",
+    "samosa": "Misc Junk",
+    "icecream": "Misc Junk",
+    "pickle": "Misc Junk",
+    "lime": "Misc Junk",
+    "soda": "Misc Junk",
+
+    // Food - Lunch HungerBox
+    "egg noodles hungerbox": "Lunch HungerBox",
+    "egg fried rice hungerbox": "Lunch HungerBox",
+    "veg meals hungerbox": "Lunch HungerBox",
+    "lunch hungerbox": "Lunch HungerBox",
+    "omlette": "Lunch HungerBox",
+    "hungerbox": "Lunch HungerBox",
+
+    // Food - Mandi Bryn Shawrma
+    "mandhi": "Mandi Bryn Shawrma",
+    "biriyani": "Mandi Bryn Shawrma",
+    "shawarma": "Mandi Bryn Shawrma",
+    "bbq": "Mandi Bryn Shawrma",
+    "roll": "Mandi Bryn Shawrma",
+
+    // Food - Nutritional Foods
+    "boiled egg": "Nutritional Foods",
+    "egg": "Nutritional Foods",
+    "muesli": "Nutritional Foods",
+    "banana": "Nutritional Foods",
+    "guava": "Nutritional Foods",
+    "apple": "Nutritional Foods",
+    "fruits": "Nutritional Foods",
+    "orange": "Nutritional Foods",
+    "bread": "Nutritional Foods",
+    "peanut": "Nutritional Foods",
+    "shake": "Nutritional Foods",
+
+    // Food - Drinking Water
+    "water": "Drinking Water",
+
+    // Shopping & Misc
+    "haircut": "Personal Living",
+    "shirt": "Personal Living",
+    "jeans": "Personal Living",
+    "pant": "Personal Living",
+    "medicine": "Personal Living",
+    "rabeeh": "Family Gifts",
+    "afeef": "Family Gifts",
+    "ummi": "Family Gifts",
+    "vappi": "Family Gifts",
+    "umma": "Family Gifts",
+    "gift": "Others Gift",
+    "turf": "Misc",
+    "spotify": "Misc"
+  };
+
+  const 
+  handleNoteChange = (val) => {
+    setNote(val);
+    const lower = val.toLowerCase().trim();
+
+    if (!lower) {
+      return;
+    }
+
+    // Search through mapping keys to see if the note contains any keyword
+    let matchedSubCat = "";
+    for (const [keyword, subCat] of Object.entries(subCategoryMapping)) {
+      if (lower.includes(keyword)) {
+        matchedSubCat = subCat;
+        break; // Conflict resolution: takes the first matched keyword encountered
+      }
+    }
+
+    if (matchedSubCat) {
+      setSubNote(matchedSubCat);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!amount || isNaN(+amount)) return;
@@ -592,6 +684,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         categoryId,
         accountId: accountId,
         note: note ? `Transfer to ${toAcc?.name} (${note})` : `Transfer to ${toAcc?.name}`,
+        subNote: subNote.trim(),
         date,
         spendType: "self",
         personId: null,
@@ -608,6 +701,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         categoryId,
         accountId: toAccountId,
         note: note ? `Transfer from ${fromAcc?.name} (${note})` : `Transfer from ${fromAcc?.name}`,
+        subNote: subNote.trim(),
         date,
         spendType: "self",
         personId: null,
@@ -632,6 +726,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
       categoryId,
       accountId,
       note,
+      subNote: subNote.trim(),
       date,
       spendType,
       personId: spendType === "other" ? finalPersonId : null,
@@ -771,19 +866,50 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         </>
       )}
 
-      <Input label="Note" value={note} onChange={setNote} placeholder="Optional note..." />
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Note</div>
+        <input
+          type="text"
+          value={note}
+          onChange={e => handleNoteChange(e.target.value)}
+          placeholder="Optional note..."
+          style={{
+            width: "100%", boxSizing: "border-box",
+            background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+            fontSize: 14, outline: "none"
+          }}
+        />
+      </div>
+      {/* Sub-Category / Audit Tag Input */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+          Sub-Category
+        </div>
+        <input
+          type="text"
+          list="subnote-suggestions"
+          value={subNote}
+          onChange={e => setSubNote(e.target.value)}
+          placeholder="e.g., Lunch, KSRTC, Petrol..."
+          style={{
+            width: "100%", boxSizing: "border-box",
+            background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+            fontSize: 14, outline: "none"
+          }}
+        />
+        <datalist id="subnote-suggestions">
+          {Array.from(new Set(transactions.map(t => t.subNote).filter(Boolean))).map((suggestion, idx) => (
+            <option key={idx} value={suggestion} />
+          ))}
+        </datalist>
+      </div>
+
       <Input label="Date" value={date} onChange={setDate} type="date" />
 
-      {/* Recurring Option */}
-      {type !== "transfer" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <button onClick={() => setIsRecurring(v => !v)}
-            style={{ width: 36, height: 20, borderRadius: 10, background: isRecurring ? COLORS.accent : COLORS.border, border: "none", cursor: "pointer", transition: "background 0.15s", position: "relative" }}>
-            <div style={{ position: "absolute", top: 2, left: isRecurring ? 18 : 2, width: 16, height: 16, borderRadius: 8, background: "#fff", transition: "left 0.15s" }} />
-          </button>
-          <span style={{ color: COLORS.textSub, fontSize: 13 }}>Recurring expense</span>
-        </div>
-      )}
+
 
       <Btn onClick={handleSubmit} style={{ width: "100%", padding: "12px 0" }}>
         {editTxn ? "💾 Update Transaction" : (type === "transfer" ? "🔄 Add Transfer" : "➕ Add Transaction")}
@@ -821,7 +947,7 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
       const acc = accounts?.find(a => a.id === t.accountId); // Fixed: accountID -> accountId
 
       // Added acc?.name so you can search by Bank name too!
-      const searchStr = `${t.note} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
+      const searchStr = `${t.note || ""} ${t.subNote || ""} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
       if (search && !searchStr.includes(search.toLowerCase())) return false;
 
       return true;
@@ -1003,7 +1129,7 @@ function BalancesScreen({ accounts, transactions, currentMonth, onMonthChange })
 
   return (
     <div>
-      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title= "🏛️ Accounts" />
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title="🏛️ Accounts" />
 
       <Card style={{ marginBottom: 20, textAlign: "center", padding: "24px 20px" }}>
         <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Total Liquid Funds</div>
@@ -2470,6 +2596,7 @@ export default function PocketLedger() {
           <AddTransaction
             categories={categories} people={people}
             onAdd={saveTransaction}
+            transactions={transactions}
             onAddPerson={addPerson}
             accounts={accounts}
             editTxn={editTxn}
