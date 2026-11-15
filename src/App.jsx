@@ -67,6 +67,41 @@ function Card({ children, style = {}, onClick }) {
   );
 }
 
+function MonthNavigator({ currentMonth, onMonthChange, title }) {
+  const displayDate = new Date(currentMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" });
+
+  const handleMonthChange = (offset) => {
+    const [year, month] = currentMonth.split("-").map(Number);
+    const date = new Date(year, (month - 1) + offset, 1);
+    const nextYear = date.getFullYear();
+    const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+    onMonthChange(`${nextYear}-${nextMonth}`);
+  };
+
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", background: COLORS.card, borderRadius: 12, border: `1px solid ${COLORS.border}`, padding: "4px" }}>
+        <button
+          onClick={() => handleMonthChange(-1)}
+          style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+        >
+          ←
+        </button>
+        <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 700, padding: "0 8px", minWidth: 110, textAlign: "center" }}>
+          {displayDate}
+        </span>
+        <button
+          onClick={() => handleMonthChange(1)}
+          style={{ background: "none", border: "none", color: COLORS.accent, padding: "8px 12px", cursor: "pointer", fontWeight: "bold" }}
+        >
+          →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Tag({ color, children }) {
   return (
     <span style={{ background: color + "20", color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
@@ -274,7 +309,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ color: COLORS.textMuted, fontSize: 12 }}>Financial Overview</div>
-          <div style={{ color: COLORS.text, fontWeight: 800, fontSize: 22 }}>Dashboard</div>
+          <div style={{ color: COLORS.text, fontWeight: 800, fontSize: 18 }}>Dashboard</div>
         </div>
 
         {/* Navigation UI */}
@@ -345,22 +380,6 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
           <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>NET WORTH</div>
           <div style={{ color: netWorth >= 0 ? COLORS.income : COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
             {fmt(netWorth)}
-          </div>
-        </Card>
-
-        {/* TO RECEIVE */}
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>TO RECEIVE</div>
-          <div style={{ color: COLORS.pending, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
-            {fmt(toReceive)}
-          </div>
-        </Card>
-
-        {/* I OWE */}
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, marginBottom: 4 }}>I OWE</div>
-          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 18, fontFamily: "'DM Mono',monospace" }}>
-            {fmt(iOwe)}
           </div>
         </Card>
       </div>
@@ -523,7 +542,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
 }
 
 // ─── ADD TRANSACTION ──────────────────────────────────────────────────────────
-function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editTxn, accounts }) {
+function AddTransaction({ categories, people, transactions = [], onAdd, onAddPerson, onClose, editTxn, accounts }) {
   const [type, setType] = useState(editTxn?.type || "expense");
   const [amount, setAmount] = useState(editTxn?.amount?.toString() || "");
   const [categoryId, setCategoryId] = useState(editTxn?.categoryId || categories[0]?.id || "");
@@ -533,12 +552,120 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
   const [personId, setPersonId] = useState(editTxn?.personId || "");
   const [newPersonName, setNewPersonName] = useState("");
   const [isRecurring, setIsRecurring] = useState(editTxn?.isRecurring || false);
+  const [subNote, setSubNote] = useState(editTxn?.subNote || "");
 
   // Account States
   const [accountId, setAccountId] = useState(editTxn?.accountId || accounts[0]?.id || "");
   const [toAccountId, setToAccountId] = useState(accounts[1]?.id || accounts[0]?.id || "");
 
   const allCats = categories;
+
+  // Comprehensive mapping dictionary extracted from your spreadsheet
+  const subCategoryMapping = {
+    // Rent
+    "rent aug": "Rent",
+
+    // Travel
+    "ksrtc": "KSRTC",
+    "train": "IRCTC",
+    "irctc wallet": "IRCTC",
+    "indianoil": "Petrol BLR",
+    "nayara": "Petrol BLR",
+    "bpcl": "Petrol BLR",
+    "shell": "Petrol BLR",
+    "hp": "Petrol BLR",
+    "bmtc egl": "BMTC to Work",
+    "uber": "Uber, Auto, Rapido",
+    "auto": "Uber, Auto, Rapido",
+    "rapido": "Uber, Auto, Rapido",
+    "taxi": "Uber, Auto, Rapido",
+
+    // Food - Misc Junk
+    "biscuit": "Misc Junk",
+    "toffee": "Misc Junk",
+    "lays": "Misc Junk",
+    "chocolate": "Misc Junk",
+    "7up": "Misc Junk",
+    "sprite": "Misc Junk",
+    "puffs": "Misc Junk",
+    "cutlet": "Misc Junk",
+    "tea": "Misc Junk",
+    "snacks": "Misc Junk",
+    "samosa": "Misc Junk",
+    "icecream": "Misc Junk",
+    "pickle": "Misc Junk",
+    "lime": "Misc Junk",
+    "soda": "Misc Junk",
+
+    // Food - Lunch HungerBox
+    "egg noodles hungerbox": "Lunch HungerBox",
+    "egg fried rice hungerbox": "Lunch HungerBox",
+    "veg meals hungerbox": "Lunch HungerBox",
+    "lunch hungerbox": "Lunch HungerBox",
+    "omlette": "Lunch HungerBox",
+    "hungerbox": "Lunch HungerBox",
+
+    // Food - Mandi Bryn Shawrma
+    "mandhi": "Mandi Bryn Shawrma",
+    "biriyani": "Mandi Bryn Shawrma",
+    "shawarma": "Mandi Bryn Shawrma",
+    "bbq": "Mandi Bryn Shawrma",
+    "roll": "Mandi Bryn Shawrma",
+
+    // Food - Nutritional Foods
+    "boiled egg": "Nutritional Foods",
+    "egg": "Nutritional Foods",
+    "muesli": "Nutritional Foods",
+    "banana": "Nutritional Foods",
+    "guava": "Nutritional Foods",
+    "apple": "Nutritional Foods",
+    "fruits": "Nutritional Foods",
+    "orange": "Nutritional Foods",
+    "bread": "Nutritional Foods",
+    "peanut": "Nutritional Foods",
+    "shake": "Nutritional Foods",
+
+    // Food - Drinking Water
+    "water": "Drinking Water",
+
+    // Shopping & Misc
+    "haircut": "Personal Living",
+    "shirt": "Personal Living",
+    "jeans": "Personal Living",
+    "pant": "Personal Living",
+    "medicine": "Personal Living",
+    "rabeeh": "Family Gifts",
+    "afeef": "Family Gifts",
+    "ummi": "Family Gifts",
+    "vappi": "Family Gifts",
+    "umma": "Family Gifts",
+    "gift": "Others Gift",
+    "turf": "Misc",
+    "spotify": "Misc"
+  };
+
+  const 
+  handleNoteChange = (val) => {
+    setNote(val);
+    const lower = val.toLowerCase().trim();
+
+    if (!lower) {
+      return;
+    }
+
+    // Search through mapping keys to see if the note contains any keyword
+    let matchedSubCat = "";
+    for (const [keyword, subCat] of Object.entries(subCategoryMapping)) {
+      if (lower.includes(keyword)) {
+        matchedSubCat = subCat;
+        break; // Conflict resolution: takes the first matched keyword encountered
+      }
+    }
+
+    if (matchedSubCat) {
+      setSubNote(matchedSubCat);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!amount || isNaN(+amount)) return;
@@ -557,6 +684,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         categoryId,
         accountId: accountId,
         note: note ? `Transfer to ${toAcc?.name} (${note})` : `Transfer to ${toAcc?.name}`,
+        subNote: subNote.trim(),
         date,
         spendType: "self",
         personId: null,
@@ -573,6 +701,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         categoryId,
         accountId: toAccountId,
         note: note ? `Transfer from ${fromAcc?.name} (${note})` : `Transfer from ${fromAcc?.name}`,
+        subNote: subNote.trim(),
         date,
         spendType: "self",
         personId: null,
@@ -597,6 +726,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
       categoryId,
       accountId,
       note,
+      subNote: subNote.trim(),
       date,
       spendType,
       personId: spendType === "other" ? finalPersonId : null,
@@ -736,19 +866,50 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
         </>
       )}
 
-      <Input label="Note" value={note} onChange={setNote} placeholder="Optional note..." />
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Note</div>
+        <input
+          type="text"
+          value={note}
+          onChange={e => handleNoteChange(e.target.value)}
+          placeholder="Optional note..."
+          style={{
+            width: "100%", boxSizing: "border-box",
+            background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+            fontSize: 14, outline: "none"
+          }}
+        />
+      </div>
+      {/* Sub-Category / Audit Tag Input */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+          Sub-Category
+        </div>
+        <input
+          type="text"
+          list="subnote-suggestions"
+          value={subNote}
+          onChange={e => setSubNote(e.target.value)}
+          placeholder="e.g., Lunch, KSRTC, Petrol..."
+          style={{
+            width: "100%", boxSizing: "border-box",
+            background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+            fontSize: 14, outline: "none"
+          }}
+        />
+        <datalist id="subnote-suggestions">
+          {Array.from(new Set(transactions.map(t => t.subNote).filter(Boolean))).map((suggestion, idx) => (
+            <option key={idx} value={suggestion} />
+          ))}
+        </datalist>
+      </div>
+
       <Input label="Date" value={date} onChange={setDate} type="date" />
 
-      {/* Recurring Option */}
-      {type !== "transfer" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <button onClick={() => setIsRecurring(v => !v)}
-            style={{ width: 36, height: 20, borderRadius: 10, background: isRecurring ? COLORS.accent : COLORS.border, border: "none", cursor: "pointer", transition: "background 0.15s", position: "relative" }}>
-            <div style={{ position: "absolute", top: 2, left: isRecurring ? 18 : 2, width: 16, height: 16, borderRadius: 8, background: "#fff", transition: "left 0.15s" }} />
-          </button>
-          <span style={{ color: COLORS.textSub, fontSize: 13 }}>Recurring expense</span>
-        </div>
-      )}
+
 
       <Btn onClick={handleSubmit} style={{ width: "100%", padding: "12px 0" }}>
         {editTxn ? "💾 Update Transaction" : (type === "transfer" ? "🔄 Add Transfer" : "➕ Add Transaction")}
@@ -757,7 +918,7 @@ function AddTransaction({ categories, people, onAdd, onAddPerson, onClose, editT
   );
 }
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth }) {
+function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth, onMonthChange }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -786,7 +947,7 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
       const acc = accounts?.find(a => a.id === t.accountId); // Fixed: accountID -> accountId
 
       // Added acc?.name so you can search by Bank name too!
-      const searchStr = `${t.note} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
+      const searchStr = `${t.note || ""} ${t.subNote || ""} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
       if (search && !searchStr.includes(search.toLowerCase())) return false;
 
       return true;
@@ -808,12 +969,7 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>📋 Transactions</div>
-        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
-          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
-        </div>
-      </div>
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title="📋 Transactions" />
 
       <Card style={{ marginBottom: 16 }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search (e.g., Food, Federal Bank)..."
@@ -929,7 +1085,7 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>🤝 Dues</div>
+        <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>🤝 Dues</div>
         {/* <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn> */}
       </div>
 
@@ -953,7 +1109,7 @@ function Dues({ people, onMarkPaid, onAddPerson }) {
 }
 
 // ─── BALANCES (REPLACES BUDGET) ────────────────────────────────────────────────
-function BalancesScreen({ accounts, transactions, currentMonth }) {
+function BalancesScreen({ accounts, transactions, currentMonth, onMonthChange }) {
 
   // Calculate cumulative balance up to the end of the currently selected month
   const getAccountBalance = (accountId) => {
@@ -973,12 +1129,7 @@ function BalancesScreen({ accounts, transactions, currentMonth }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>💳 Accounts & Balances</div>
-        <div style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, background: COLORS.accentDim, padding: "4px 12px", borderRadius: 8 }}>
-          {new Date(currentMonth + "-01").toLocaleString("default", { month: "short", year: "numeric" })}
-        </div>
-      </div>
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title="🏛️ Accounts" />
 
       <Card style={{ marginBottom: 20, textAlign: "center", padding: "24px 20px" }}>
         <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Total Liquid Funds</div>
@@ -1495,6 +1646,7 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
         const rowData = {
           Date: row.date,
           Info: row.note || cat?.name || "Transaction",
+          "Sub-Category": row.subNote || "",
           Account: acc?.name || "—",
           In: inVal,
           Out: outVal,
@@ -1587,6 +1739,7 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
             <tr style={{ borderBottom: `1px solid ${COLORS.border}`, background: COLORS.bg, color: COLORS.textMuted }}>
               <th style={{ padding: "12px" }}>Date</th>
               <th style={{ padding: "12px" }}>Info</th>
+              <th style={{ padding: "12px" }}>Sub-Category</th>
               <th style={{ padding: "12px" }}>Account</th>
               <th style={{ padding: "12px", color: COLORS.income }}>In</th>
               <th style={{ padding: "12px", color: COLORS.expense }}>Out</th>
@@ -1606,6 +1759,9 @@ function SheetScreen({ transactions, categories, accounts, currentMonth, onMonth
                   <td style={{ padding: "12px", color: COLORS.textMuted }}>{row.date.slice(5)}</td>
                   <td style={{ padding: "12px", color: row.type === "opening" ? COLORS.textMuted : COLORS.text, fontStyle: row.type === "opening" ? "italic" : "normal" }}>
                     {row.note || "—"}
+                  </td>
+                  <td style={{ padding: "12px", color: COLORS.accent, fontSize: 12 }}>
+                    {row.subNote || "—"}
                   </td>
                   <td style={{ padding: "12px", color: COLORS.textSub }}>{acc?.name || "—"}</td>
 
@@ -1661,7 +1817,7 @@ export default function PocketLedger() {
 
   const [accounts, setAccounts] = useState([
     { id: "bank_secondary", name: "SBI", icon: "🏛️", color: "#0e3ba4" },
-    { id: "bank_primary", name: "Federal Bank", icon: "🏦", color: "#7EB8FF" },
+    { id: "bank_primary", name: "HDFC", icon: "🏦", color: "#9574e8" },
     { id: "cash", name: "Cash in Hand", icon: "💵", color: "#5de61e" },
   ]);
   const [categories, setCategories] = useState([]);
@@ -1687,23 +1843,24 @@ export default function PocketLedger() {
 
   const performBiometricAuth = async () => {
     try {
-      const result = await NativeBiometric.isAvailable();
+      const result = await NativeBiometric.isAvailable({ useFallback: true });
 
       if (result.isAvailable) {
-        const authResult = await NativeBiometric.verifyIdentity({
+        await NativeBiometric.verifyIdentity({
           reason: "Unlock Mee-Zaan",
           title: "Biometric Login",
-          subtitle: "Use your fingerprint to continue",
+          subtitle: "Use Face Unlock or Fingerprint to continue",
           description: "Your financial data is protected.",
+          useFallback: true,
         });
 
         setIsLocked(false); // Unlock the app on success
       } else {
-        setIsLocked(false); // No fingerprint set up, just let them in
+        setIsLocked(false); // No biometrics set up, let user in
       }
     } catch (error) {
       console.error("Auth failed", error);
-      // You can handle "Cancel" or "Failed" here (e.g., show a 'Retry' button)
+      // Handle cancel/failure (e.g., keep lock screen visible with a Retry button)
     }
   };
 
@@ -2104,11 +2261,12 @@ export default function PocketLedger() {
         onRestore={restoreTransaction}
         onEdit={t => { setEditTxn(t); setShowAddModal(true); }}
         accounts={accounts}
-        currentMonth={currentMonth} />;
+        currentMonth={currentMonth}
+        onMonthChange={setCurrentMonth} />;
       case "dues":
         return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
       case "balances":
-        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} />;
+        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
       case "goals":
         return (
           <GoalsScreen
@@ -2444,6 +2602,7 @@ export default function PocketLedger() {
           <AddTransaction
             categories={categories} people={people}
             onAdd={saveTransaction}
+            transactions={transactions}
             onAddPerson={addPerson}
             accounts={accounts}
             editTxn={editTxn}
