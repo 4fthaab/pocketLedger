@@ -1843,23 +1843,24 @@ export default function PocketLedger() {
 
   const performBiometricAuth = async () => {
     try {
-      const result = await NativeBiometric.isAvailable();
+      const result = await NativeBiometric.isAvailable({ useFallback: true });
 
       if (result.isAvailable) {
-        const authResult = await NativeBiometric.verifyIdentity({
+        await NativeBiometric.verifyIdentity({
           reason: "Unlock Mee-Zaan",
           title: "Biometric Login",
-          subtitle: "Use your fingerprint to continue",
+          subtitle: "Use Face Unlock or Fingerprint to continue",
           description: "Your financial data is protected.",
+          useFallback: true,
         });
 
         setIsLocked(false); // Unlock the app on success
       } else {
-        setIsLocked(false); // No fingerprint set up, just let them in
+        setIsLocked(false); // No biometrics set up, let user in
       }
     } catch (error) {
       console.error("Auth failed", error);
-      // You can handle "Cancel" or "Failed" here (e.g., show a 'Retry' button)
+      // Handle cancel/failure (e.g., keep lock screen visible with a Retry button)
     }
   };
 
