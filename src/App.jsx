@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { PieChart, Pie, Cell, Area, XAxis, YAxis, Tooltip, LineChart, AreaChart, Line, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Area, XAxis, YAxis, Tooltip, LineChart, AreaChart, Line, ResponsiveContainer, ReferenceLine } from "recharts";
 import { auth, db } from "./firebase";
 import { Browser } from "@capacitor/browser";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile, onAuthStateChanged, signOut } from "firebase/auth";
@@ -225,12 +225,11 @@ function Modal({ title, onClose, children }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ transactions, categories, people, goals, liabilities, currentMonth, onMonthChange }) {
+function Dashboard({ transactions, categories, people, goals, liabilities, pots = [], currentMonth, onMonthChange }) {
   const displayDate = new Date(currentMonth + "-01").toLocaleString("default", { month: "long", year: "numeric" });
 
   // 1. THIS MONTH'S TRANSACTIONS (Resets to zero initially)
   const txns = getMonthTxns(transactions, currentMonth).filter(t => !t.isDeleted);
-  // const income = txns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const income = txns
     .filter(t => t.type === "income" && !t.note?.includes("Transfer"))
     .reduce((s, t) => s + t.amount, 0);
@@ -249,6 +248,11 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
   const iOwe = people.filter(p => p.type === "owe").reduce((s, p) => s + p.balance, 0);
   const liabilityTotal = liabilities.reduce((s, l) => s + (l.totalAmount - l.paidAmount), 0);
   const netWorth = cumulativeBalance + toReceive - iOwe - liabilityTotal;
+
+  // 4. MONTHLY EXPENSE LIMIT (Sum of all configured pot estimates for this month)
+  const monthlyExpenseLimit = useMemo(() => {
+    return pots.reduce((sum, p) => sum + (Number(p.estimated) || 0), 0);
+  }, [pots]);
 
   const [showFullChartModal, setShowFullChartModal] = useState(false);
 
@@ -269,56 +273,42 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
     return { name: cat ? cat.name : cid, value: val };
   }).sort((a, b) => b.value - a.value);
 
-  const today = new Date();
-  const lineData = [];
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(today.getDate() - i);
-    const key = d.toISOString().split("T")[0];
-
-    // Calculate cumulative balance up to THIS specific day
-    const historicalTxns = transactions.filter(t => !t.isDeleted && t.date <= key);
-    const dailyBalance = historicalTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
-
-    lineData.push({
-      day: key.slice(-2), // Shows the date (e.g., "12")
-      balance: dailyBalance,
-    });
-  }
-
-  const fullMonthLineData = [];
+  // 5. CUMULATIVE EXPENSE TREND DATA (Starts at ₹0 and increases with each expense)
   const [year, month] = currentMonth.split("-").map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
 
-  // 1. Calculate the starting point (Closing balance of all previous months)
-  const prevTxns = transactions.filter(t => !t.isDeleted && t.date.slice(0, 7) < currentMonth);
-  let runningTotal = prevTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
+  const expenseTrendData = useMemo(() => {
+    const points = [
+      {
+        day: "00",
+        fullDate: "Start of Month",
+        spent: 0,
+      }
+    ];
 
-  // 2. Add "Day 0" as the baseline (Previous Month Closing)
-  fullMonthLineData.push({
-    day: "00",
-    fullDate: "Previous Month Closing",
-    balance: runningTotal,
-  });
+    let runningExpense = 0;
+    for (let i = 1; i <= daysInMonth; i++) {
+      const dayString = String(i).padStart(2, '0');
+      const key = `${currentMonth}-${dayString}`;
 
-  // 3. Loop through each day of the current month
-  for (let i = 1; i <= daysInMonth; i++) {
-    const dayString = String(i).padStart(2, '0');
-    const key = `${currentMonth}-${dayString}`;
+      const daySpent = txns
+        .filter(t => t.date === key && t.type === "expense" && !t.note?.includes("Transfer"))
+        .reduce((s, t) => s + t.amount, 0);
 
-    const dayTxns = txns.filter(t => t.date === key);
-    const dayIncome = dayTxns.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
-    const dayExpense = dayTxns.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+      runningExpense += daySpent;
 
-    runningTotal += (dayIncome - dayExpense);
+      points.push({
+        day: dayString,
+        fullDate: key,
+        spent: runningExpense,
+      });
+    }
+    return points;
+  }, [txns, currentMonth, daysInMonth]);
 
-    fullMonthLineData.push({
-      day: dayString,
-      fullDate: key,
-      balance: runningTotal,
-    });
-  }
+  const isOverLimit = monthlyExpenseLimit > 0 && expense > monthlyExpenseLimit;
+  const trendColor = isOverLimit ? COLORS.expense : COLORS.accent;
+  const chartMaxY = Math.max(expense, monthlyExpenseLimit, 100);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -381,6 +371,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
           </div>
           <div style={{ color: COLORS.textSub, fontSize: 9, marginTop: 4 }}>Carried over</div>
         </Card>
+
         {/* NET WORTH */}
         <Card
           style={{
@@ -400,8 +391,64 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
         </Card>
       </div>
 
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+        {/* BY CATEGORY PIE CHART */}
+
+        {/* CUMULATIVE EXPENSE TREND WITH MONTHLY LIMIT LINE */}
+        <Card onClick={() => setShowFullChartModal(true)}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8 }}>
+            <div style={{ fontWeight: 700, color: COLORS.text }}>📈 Expense Trend</div>
+            {monthlyExpenseLimit > 0 ? (
+              <Tag color={isOverLimit ? COLORS.expense : COLORS.warning}>
+                Limit: {fmt(monthlyExpenseLimit)}
+              </Tag>
+            ) : (
+              <span style={{ color: COLORS.textMuted, fontSize: 11 }}>No limit set</span>
+            )}
+          </div>
+
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={expenseTrendData} margin={{ top: 10, right: 6, left: 6, bottom: 0 }}>
+              <defs>
+                <linearGradient id="colorExpPreview" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={trendColor} stopOpacity={0.25} />
+                  <stop offset="95%" stopColor={trendColor} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis
+                dataKey="day"
+                tick={{ fill: COLORS.textMuted, fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                interval={4}
+              />
+              <YAxis hide domain={[0, Math.ceil(chartMaxY * 1.1)]} />
+              <Tooltip
+                labelFormatter={(label, payload) => payload?.[0]?.payload?.fullDate || `Day ${label}`}
+                formatter={v => [fmt(v), "Cumulative Spent"]}
+                contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }}
+                itemStyle={{ color: trendColor }}
+              />
+              {monthlyExpenseLimit > 0 && (
+                <ReferenceLine
+                  y={monthlyExpenseLimit}
+                  stroke={COLORS.warning}
+                  strokeDasharray="4 4"
+                  strokeWidth={1.5}
+                />
+              )}
+              <Area
+                type="monotone"
+                dataKey="spent"
+                stroke={trendColor}
+                strokeWidth={2.5}
+                fillOpacity={1}
+                fill="url(#colorExpPreview)"
+                dot={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
         <Card>
           <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🍕 By Category</div>
           {pieData.length > 0 ? (
@@ -421,21 +468,19 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
                   <Tooltip
                     formatter={(v) => fmt(v)}
                     contentStyle={{
-                      background: COLORS.card,       // Matches your card background (#161A23)
+                      background: COLORS.card,
                       border: `1px solid ${COLORS.border}`,
                       borderRadius: "12px",
                       padding: "8px 12px",
                       boxShadow: "0 10px 20px rgba(0,0,0,0.4)"
                     }}
                     itemStyle={{
-                      color: COLORS.text,            // White/Light text (#F0F4FF)
+                      color: COLORS.text,
                       fontSize: "14px",
                       fontWeight: "600"
                     }}
-                    // This removes the default "square" icon color if you want a cleaner look
                     iconType="circle"
                   />
-                  {/* <Tooltip formatter={v => fmt(v)} contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }} /> */}
                 </PieChart>
               </ResponsiveContainer>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px", marginTop: 4 }}>
@@ -449,72 +494,43 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
             </>
           ) : <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: "40px 0" }}>No expenses yet</div>}
         </Card>
-
-        <Card onClick={() => setShowFullChartModal(true)}>
-          <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>📈 Balance Trend (Last 7 Days)</div>
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={lineData}>
-              <defs>
-                <linearGradient id="colorBalPreview" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={COLORS.accent} stopOpacity={0.2} />
-                  <stop offset="95%" stopColor={COLORS.accent} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="day" tick={{ fill: COLORS.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis hide domain={['auto', 'auto']} />
-              <Tooltip
-                formatter={v => fmt(v)}
-                contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.text }}
-                itemStyle={{ color: COLORS.accent }}
-              />
-              <Area
-                type="monotone"
-                dataKey="balance"
-                stroke={COLORS.accent}
-                strokeWidth={2}
-                fillOpacity={1}
-                fill="url(#colorBalPreview)"
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </Card>
       </div>
 
-      <Card>
-        <div style={{ fontWeight: 700, color: COLORS.text, marginBottom: 12 }}>🎯 Saving Goals</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {goals.map(g => (
-            <div key={g.id}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ color: COLORS.text, fontSize: 13 }}>{g.icon} {g.name}</span>
-                <span style={{ color: COLORS.textMuted, fontSize: 12, fontFamily: "'DM Mono',monospace" }}>
-                  {fmt(g.savedAmount)} / {fmt(g.targetAmount)}
-                </span>
-              </div>
-              <ProgressBar value={g.savedAmount} max={g.targetAmount} color={g.color} />
-            </div>
-          ))}
-        </div>
-      </Card>
-      {/* ADD THIS MODAL AT THE END OF THE DASHBOARD RETURN */}
+      {/* FULL EXPENSE TREND MODAL */}
       {showFullChartModal && (
-        <Modal title={`Cash Flow: ${displayDate}`} onClose={() => setShowFullChartModal(false)}>
-          {/* Scrollable Container */}
+        <Modal title={`📈Expense Trend`} onClose={() => setShowFullChartModal(false)}>
+          {/* Status Summary Strip */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            background: COLORS.bg, padding: "12px 14px", borderRadius: 12,
+            border: `1px solid ${COLORS.border}`, marginBottom: 14, fontSize: 12
+          }}>
+            <div>
+              <span style={{ color: COLORS.textMuted }}>Total Spent: </span>
+              <strong style={{ color: trendColor, fontFamily: "'DM Mono',monospace" }}>{fmt(expense)}</strong>
+            </div>
+            {monthlyExpenseLimit > 0 && (
+              <div>
+                <span style={{ color: COLORS.textMuted }}>Monthly Limit: </span>
+                <strong style={{ color: COLORS.warning, fontFamily: "'DM Mono',monospace" }}>{fmt(monthlyExpenseLimit)}</strong>
+              </div>
+            )}
+          </div>
+
+          {/* Scrollable Chart Container */}
           <div style={{
             width: "100%",
             overflowX: "auto",
             overflowY: "hidden",
             paddingBottom: 10
           }}>
-            {/* The inner div is forced to be wider than the screen to create scrolling */}
             <div style={{ width: Math.max(600, daysInMonth * 35), height: 300 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={fullMonthLineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <AreaChart data={expenseTrendData} margin={{ top: 16, right: 16, left: -10, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="colorBal" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={COLORS.accent} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={COLORS.accent} stopOpacity={0} />
+                    <linearGradient id="colorExpFull" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={trendColor} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={trendColor} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <XAxis
@@ -525,7 +541,7 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
                   />
                   <YAxis
                     hide={false}
-                    domain={['auto', 'auto']}
+                    domain={[0, Math.ceil(chartMaxY * 1.15)]}
                     tick={{ fill: COLORS.textMuted, fontSize: 10 }}
                     axisLine={false}
                     tickLine={false}
@@ -534,18 +550,33 @@ function Dashboard({ transactions, categories, people, goals, liabilities, curre
                   />
                   <Tooltip
                     labelFormatter={(label, payload) => payload?.[0]?.payload?.fullDate || label}
-                    formatter={v => [fmt(v), "Balance"]}
+                    formatter={v => [fmt(v), "Cumulative Spent"]}
                     contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}`, borderRadius: 12, color: COLORS.text }}
                   />
+                  {monthlyExpenseLimit > 0 && (
+                    <ReferenceLine
+                      y={monthlyExpenseLimit}
+                      stroke={COLORS.warning}
+                      strokeDasharray="5 5"
+                      strokeWidth={2}
+                      label={{
+                        value: `Limit: ${fmt(monthlyExpenseLimit)}`,
+                        position: "insideTopLeft",
+                        fill: COLORS.warning,
+                        fontSize: 11,
+                        fontWeight: 700
+                      }}
+                    />
+                  )}
                   <Area
                     type="monotone"
-                    dataKey="balance"
-                    stroke={COLORS.accent}
+                    dataKey="spent"
+                    stroke={trendColor}
                     strokeWidth={3}
                     fillOpacity={1}
-                    fill="url(#colorBal)"
+                    fill="url(#colorExpFull)"
                     connectNulls
-                    animationDuration={1000}
+                    animationDuration={800}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -569,6 +600,7 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
   const [newPersonName, setNewPersonName] = useState("");
   const [isRecurring, setIsRecurring] = useState(editTxn?.isRecurring || false);
   const [subNote, setSubNote] = useState(editTxn?.subNote || "");
+  const [showSubSuggestions, setShowSubSuggestions] = useState(false);
 
   // Account States
   const [accountId, setAccountId] = useState(editTxn?.accountId || accounts[0]?.id || "");
@@ -580,6 +612,7 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
   const subCategoryMapping = {
     // Rent
     "rent aug": "Rent",
+    "maintanence" : "Maintenance",
 
     // Travel
     "ksrtc": "KSRTC",
@@ -595,8 +628,16 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     "auto": "Uber, Auto, Rapido",
     "rapido": "Uber, Auto, Rapido",
     "taxi": "Uber, Auto, Rapido",
+    "metro":"BMTC BMRCL to Home",
+    "brigade road":"BMTC BMRCL to Home",
+    "shivajinagara":"BMTC BMRCL to Home",
+    "majestic":"BMTC BMRCL to Home",
+    "silk board":"BMTC BMRCL to Home",
+    "bmtc to":"BMTC BMRCL Leisure",
 
     // Food - Misc Junk
+    "porotta": "Breakfast",
+    "tea": "Breakfast",
     "biscuit": "Misc Junk",
     "toffee": "Misc Junk",
     "lays": "Misc Junk",
@@ -605,7 +646,6 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     "sprite": "Misc Junk",
     "puffs": "Misc Junk",
     "cutlet": "Misc Junk",
-    "tea": "Misc Junk",
     "snacks": "Misc Junk",
     "samosa": "Misc Junk",
     "icecream": "Misc Junk",
@@ -640,11 +680,13 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     "bread": "Nutritional Foods",
     "peanut": "Nutritional Foods",
     "shake": "Nutritional Foods",
+    "dates": "Nutritional Foods",
 
     // Food - Drinking Water
     "water": "Drinking Water",
 
     // Shopping & Misc
+    "Split":"Room Amenities",
     "haircut": "Personal Living",
     "shirt": "Personal Living",
     "jeans": "Personal Living",
@@ -750,6 +792,17 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     });
     onClose?.();
   };
+
+  const filteredSubSuggestions = useMemo(() => {
+    const unique = Array.from(
+      new Set([
+        ...Object.values(subCategoryMapping),
+        ...transactions.map(t => t.subNote).filter(Boolean)
+      ])
+    );
+    if (!subNote.trim()) return unique;
+    return unique.filter(s => s.toLowerCase().includes(subNote.toLowerCase().trim()));
+  }, [transactions, subNote]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -898,29 +951,94 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
           }}
         />
       </div>
-      {/* Sub-Category / Audit Tag Input */}
-      <div style={{ marginBottom: 14 }}>
+      {/* Sub-Category / Audit Tag Input (Parent-Child Anchored Dropdown) */}
+      <div style={{ marginBottom: 14, position: "relative" }}>
         <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
           Sub-Category
         </div>
-        <input
-          type="text"
-          list="subnote-suggestions"
-          value={subNote}
-          onChange={e => setSubNote(e.target.value)}
-          placeholder="e.g., Lunch, KSRTC, Petrol..."
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: COLORS.bg, border: `1px solid ${COLORS.border}`,
-            borderRadius: 10, padding: "10px 14px", color: COLORS.text,
-            fontSize: 14, outline: "none"
-          }}
-        />
-        <datalist id="subnote-suggestions">
-          {Array.from(new Set(transactions.map(t => t.subNote).filter(Boolean))).map((suggestion, idx) => (
-            <option key={idx} value={suggestion} />
-          ))}
-        </datalist>
+        <div style={{ position: "relative" }}>
+          <input
+            type="text"
+            value={subNote}
+            onFocus={() => setShowSubSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSubSuggestions(false), 150)}
+            onChange={e => {
+              setSubNote(e.target.value);
+              setShowSubSuggestions(true);
+            }}
+            placeholder="e.g., Lunch, KSRTC, Petrol..."
+            style={{
+              width: "100%", boxSizing: "border-box",
+              background: COLORS.bg,
+              border: `1px solid ${showSubSuggestions ? COLORS.accent : COLORS.border}`,
+              borderRadius: showSubSuggestions && filteredSubSuggestions.length > 0 ? "10px 10px 0 0" : 10,
+              padding: "10px 36px 10px 14px", color: COLORS.text,
+              fontSize: 14, outline: "none", transition: "border 0.15s"
+            }}
+          />
+
+          {/* Toggle / Clear Trigger */}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              if (subNote) {
+                setSubNote("");
+                setShowSubSuggestions(true);
+              } else {
+                setShowSubSuggestions(prev => !prev);
+              }
+            }}
+            style={{
+              position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", color: COLORS.textMuted,
+              fontSize: 12, cursor: "pointer", padding: "4px"
+            }}
+          >
+            {subNote ? "✕" : "▼"}
+          </button>
+        </div>
+
+        {/* Anchored Child Dropdown List */}
+        {showSubSuggestions && filteredSubSuggestions.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              right: 0,
+              zIndex: 50,
+              background: COLORS.card,
+              border: `1px solid ${COLORS.accent}`,
+              borderTop: "none",
+              borderRadius: "0 0 10px 10px",
+              maxHeight: 165,
+              overflowY: "auto",
+              boxShadow: "0 12px 24px rgba(0,0,0,0.65)"
+            }}
+          >
+            {filteredSubSuggestions.map((suggestion, idx) => (
+              <div
+                key={idx}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // Prevents input blur before value is set
+                  setSubNote(suggestion);
+                  setShowSubSuggestions(false);
+                }}
+                style={{
+                  padding: "10px 14px",
+                  fontSize: 13,
+                  color: COLORS.text,
+                  borderBottom: idx < filteredSubSuggestions.length - 1 ? `1px solid ${COLORS.border}` : "none",
+                  cursor: "pointer",
+                  background: subNote.toLowerCase() === suggestion.toLowerCase() ? COLORS.accentDim : "transparent"
+                }}
+              >
+                {suggestion}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Input label="Date" value={date} onChange={setDate} type="date" />
@@ -933,8 +1051,9 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     </div>
   );
 }
+
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth, onMonthChange }) {
+function Transactions({ transactions, categories, people, accounts, onSelectTxn, onRestore, currentMonth, onMonthChange }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -942,27 +1061,19 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
 
   const filtered = useMemo(() => {
     return transactions.filter(t => {
-      // 1. Month Filter (Only show transactions matching currentMonth)
       if (t.date) {
-        const tMonth = t.date.slice(0, 7); // Extracts "YYYY-MM"
+        const tMonth = t.date.slice(0, 7);
         if (tMonth !== currentMonth) return false;
       }
 
-      // 2. Trash Filter
       if (showDeleted ? !t.isDeleted : t.isDeleted) return false;
-
-      // 3. Type Filter
       if (filterType !== "all" && t.type !== filterType) return false;
-
-      // 4. Category Filter
       if (filterCat !== "all" && t.categoryId !== filterCat) return false;
 
-      // 5. Search Filter
       const cat = categories.find(c => c.id === t.categoryId);
       const person = t.personId ? people.find(p => p.id === t.personId) : null;
-      const acc = accounts?.find(a => a.id === t.accountId); // Fixed: accountID -> accountId
+      const acc = accounts?.find(a => a.id === t.accountId);
 
-      // Added acc?.name so you can search by Bank name too!
       const searchStr = `${t.note || ""} ${t.subNote || ""} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
       if (search && !searchStr.includes(search.toLowerCase())) return false;
 
@@ -971,17 +1082,14 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
       const dateA = new Date(a.date);
       const dateB = new Date(b.date);
 
-      // Primary Sort: By Date (Newest first)
       if (dateB > dateA) return 1;
       if (dateB < dateA) return -1;
 
-      // Secondary Sort: By order of creation (Newest first)
-      // This ensures items added on the same day stay in exact chronological order
       const timeA = a.createdAt?.seconds || 0;
       const timeB = b.createdAt?.seconds || 0;
       return timeB - timeA;
     });
-  }, [transactions, search, filterType, filterCat, showDeleted, categories, people, accounts, currentMonth]); // Added accounts to dependencies
+  }, [transactions, search, filterType, filterCat, showDeleted, categories, people, accounts, currentMonth]);
 
   return (
     <div>
@@ -1022,14 +1130,19 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
           const acc = accounts?.find(a => a.id === t.accountId);
 
           return (
-            <Card key={t.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", opacity: t.isDeleted ? 0.5 : 1 }}>
+            <Card
+              key={t.id}
+              onClick={!t.isDeleted ? () => onSelectTxn(t) : undefined}
+              style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", opacity: t.isDeleted ? 0.55 : 1 }}
+            >
               <div style={{ fontSize: 26 }}>{cat?.icon || "💳"}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ color: COLORS.text, fontWeight: 600, fontSize: 14 }}>{t.note || cat?.name || "—"}</div>
-                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                   <Tag color={cat?.color || COLORS.accent}>{cat?.name || "—"}</Tag>
                   {acc && <Tag color={acc.color || COLORS.textMuted}>{acc.icon} {acc.name}</Tag>}
                   {person && <Tag color={COLORS.pending}>👤 {person.name}</Tag>}
+                  {t.settledDue && <Tag color={COLORS.income}>✓ Due Settled</Tag>}
                   <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{t.date}</span>
                   {t.isRecurring && <Tag color={COLORS.textMuted}>🔁 Recurring</Tag>}
                 </div>
@@ -1039,17 +1152,14 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
                   color: t.type === "income" ? COLORS.income : COLORS.expense,
                   fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16
                 }}>{t.type === "income" ? "+" : "-"}{fmt(t.amount)}</div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {!t.isDeleted && (
-                    <>
-                      <button onClick={() => onEdit(t)} style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Edit</button>
-                      <button onClick={() => onDelete(t.id)} style={{ background: COLORS.expenseDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.expense, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Delete</button>
-                    </>
-                  )}
-                  {t.isDeleted && (
-                    <button onClick={() => onRestore(t.id)} style={{ background: COLORS.pendingDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.warning, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Restore</button>
-                  )}
-                </div>
+                {t.isDeleted && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onRestore(t.id); }}
+                    style={{ background: COLORS.pendingDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.warning, cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                  >
+                    Restore
+                  </button>
+                )}
               </div>
             </Card>
           );
@@ -1059,67 +1169,814 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
   );
 }
 
-// ─── DUES ─────────────────────────────────────────────────────────────────────
-function Dues({ people, onMarkPaid, onAddPerson }) {
-  const lend = people.filter(p => p.type === "lend" && p.balance > 0);
-  const owe = people.filter(p => p.type === "owe" && p.balance > 0);
-  const [showAdd, setShowAdd] = useState(false);
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [dueType, setDueType] = useState("lend");
+// ─── TRANSACTION DETAIL MODAL ─────────────────────────────────────────────────
+function TransactionDetailModal({ txn, categories, people, accounts, onClose, onEdit, onDelete, onMarkDuePaid }) {
+  if (!txn) return null;
 
-  const handleAdd = () => {
-    if (!name || !amount) return;
-    onAddPerson({ name, balance: +amount, type: dueType });
-    setName(""); setAmount(""); setShowAdd(false);
-  };
+  const cat = categories.find(c => c.id === txn.categoryId);
+  const acc = accounts?.find(a => a.id === txn.accountId);
+  const person = txn.personId ? people.find(p => p.id === txn.personId) : null;
+  const isDueTxn = txn.type === "expense" && txn.spendType === "other" && person;
 
-  const PersonCard = ({ p }) => (
-    <Card key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}>
+  const DetailRow = ({ label, value }) => (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "11px 0", borderBottom: `1px solid ${COLORS.border}`
+    }}>
+      <span style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600 }}>{label}</span>
+      <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 600, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <Modal title="📄 Transaction Details" onClose={onClose}>
+      {/* Hero Amount Banner */}
       <div style={{
-        width: 40, height: 40, borderRadius: 20, background: p.type === "lend" ? COLORS.accentDim : COLORS.expenseDim,
-        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
+        background: COLORS.bg, borderRadius: 16, padding: "20px 16px",
+        textAlign: "center", border: `1px solid ${COLORS.border}`, marginBottom: 16
       }}>
-        {p.type === "lend" ? "👤" : "👤"}
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{p.name}</div>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 2 }}>
-          {p.type === "lend" ? "Owes you" : "You owe"}
+        <div style={{ fontSize: 34, marginBottom: 6 }}>{cat?.icon || "💳"}</div>
+        <div style={{
+          color: txn.type === "income" ? COLORS.income : COLORS.expense,
+          fontWeight: 800, fontSize: 28, fontFamily: "'DM Mono',monospace"
+        }}>
+          {fmt(txn.amount)}
+        </div>
+        <div style={{ color: COLORS.textSub, fontSize: 13, marginTop: 4, fontWeight: 600 }}>
+          {txn.note || cat?.name || "Transaction"}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+          {isDueTxn && (
+            <Tag color={txn.settledDue ? COLORS.income : COLORS.pending}>
+              {txn.settledDue ? "✓ Due Settled" : `⏳ Pending Due (${person.name})`}
+            </Tag>
+          )}
         </div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-        <div style={{ color: p.type === "lend" ? COLORS.income : COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>{fmt(p.balance)}</div>
-        <button onClick={() => onMarkPaid(p.id)}
-          style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
-          ✓ Settled
-        </button>
+
+      {/* Clean Non-Redundant Breakdown */}
+      <div style={{ marginBottom: 20 }}>
+        <DetailRow label="Category" value={`${cat?.icon || ""} ${cat?.name || "Uncategorized"}`} />
+        <DetailRow label="Account" value={acc ? `${acc.icon} ${acc.name}` : "—"} />
+        <DetailRow label="Date" value={txn.date} />
+        {txn.subNote && <DetailRow label="Sub-Category" value={txn.subNote} />}
+        {isDueTxn && (
+          <>
+            <DetailRow label="Spend For" value={`${person.name}`} />
+            <DetailRow
+              label={`${person.name}'s Current Due`}
+              value={<span style={{ color: person.balance > 0 ? COLORS.pending : COLORS.income }}>{fmt(person.balance)}</span>}
+            />
+          </>
+        )}
       </div>
-    </Card>
+
+      {/* Mark Due Paid Action (Only for active "For Someone" transactions) */}
+      {isDueTxn && !txn.settledDue && !txn.isDeleted && (
+        <Btn
+          onClick={() => onMarkDuePaid(txn)}
+          color={COLORS.income}
+          style={{ width: "100%", padding: "12px 0", marginBottom: 12 }}
+        >
+          ✓ Mark Due Paid & Move to Trash
+        </Btn>
+      )}
+
+      {/* Edit & Delete Actions */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+        <Btn
+          onClick={() => onEdit(txn)}
+          outline
+          color={COLORS.accent}
+          style={{ flex: 1, padding: "10px 0" }}
+        >
+          ✏️ Edit
+        </Btn>
+        <Btn
+          onClick={() => onDelete(txn.id)}
+          outline
+          color={COLORS.expense}
+          style={{ flex: 1, padding: "10px 0" }}
+        >
+          🗑 Delete
+        </Btn>
+      </div>
+
+      {/* Navigation Back / Close */}
+      <button
+        onClick={onClose}
+        style={{
+          width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+          borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+          fontWeight: 700, fontSize: 13, cursor: "pointer"
+        }}
+      >
+        ← Back to Logs
+      </button>
+    </Modal>
   );
+}
+
+// ─── ANALYSIS SCREEN (EXPENSE POTS & BUDGET TRACKER) ──────────────────────────
+function AnalysisScreen({ transactions, categories, currentMonth, onMonthChange, pots, prevMonthPots, onSaveMonthPots }) {
+  const [showPotForm, setShowPotForm] = useState(false);
+  const [editingPotId, setEditingPotId] = useState(null);
+
+  // Create / Edit Pot Form State
+  const [potName, setPotName] = useState("");
+  const [potLimit, setPotLimit] = useState("");
+  const [selectedCatIds, setSelectedCatIds] = useState([]);
+
+  // Drill-down Modal States
+  const [activePotId, setActivePotId] = useState(null);
+  const [activeSubCatId, setActiveSubCatId] = useState(null);
+  const [quickEditLimit, setQuickEditLimit] = useState("");
+
+  // 1. Active expenses for the selected month (excluding transfers & deleted items)
+  const monthExpenses = useMemo(() => {
+    return getMonthTxns(transactions, currentMonth).filter(
+      t => !t.isDeleted && t.type === "expense" && !t.note?.includes("Transfer")
+    );
+  }, [transactions, currentMonth]);
+
+  // 2. Compute Estimated, Current, Balance & Category Breakdown for each pot
+  const potStats = useMemo(() => {
+    return pots.map(pot => {
+      const catIds = pot.categoryIds || [];
+      const potTxns = monthExpenses.filter(t => catIds.includes(t.categoryId));
+      const current = potTxns.reduce((sum, t) => sum + t.amount, 0);
+      const estimated = Number(pot.estimated) || 0;
+      const balance = estimated - current;
+
+      const categoryBreakdown = catIds.map(cid => {
+        const cat = categories.find(c => c.id === cid);
+        const catTxns = potTxns
+          .filter(t => t.categoryId === cid)
+          .sort((a, b) => new Date(b.date) - new Date(a.date));
+        const spent = catTxns.reduce((sum, t) => sum + t.amount, 0);
+        return {
+          id: cid,
+          name: cat?.name || cid,
+          icon: cat?.icon || "📦",
+          color: cat?.color || COLORS.accent,
+          spent,
+          txns: catTxns,
+        };
+      }).sort((a, b) => b.spent - a.spent);
+
+      return {
+        ...pot,
+        estimated,
+        current,
+        balance,
+        categoryBreakdown,
+      };
+    });
+  }, [pots, monthExpenses, categories]);
+
+  // 3. Monthly Totals across all pots
+  const totals = useMemo(() => {
+    const estimated = potStats.reduce((s, p) => s + p.estimated, 0);
+    const current = potStats.reduce((s, p) => s + p.current, 0);
+    return {
+      estimated,
+      current,
+      balance: estimated - current,
+    };
+  }, [potStats]);
+
+  // Active modals derived data
+  const activePot = potStats.find(p => p.id === activePotId) || null;
+  const activeSubCat = activePot?.categoryBreakdown.find(c => c.id === activeSubCatId) || null;
+
+  // Categories already claimed by OTHER pots in this month (for visual clarity)
+  const assignedElsewhere = useMemo(() => {
+    const map = {};
+    pots.forEach(p => {
+      if (p.id !== editingPotId) {
+        (p.categoryIds || []).forEach(cid => {
+          map[cid] = p.name;
+        });
+      }
+    });
+    return map;
+  }, [pots, editingPotId]);
+
+  const openCreateForm = () => {
+    setEditingPotId(null);
+    setPotName("");
+    setPotLimit("");
+    setSelectedCatIds([]);
+    setShowPotForm(true);
+  };
+
+  const openEditForm = (pot) => {
+    setEditingPotId(pot.id);
+    setPotName(pot.name);
+    setPotLimit(String(pot.estimated));
+    setSelectedCatIds(pot.categoryIds || []);
+    setShowPotForm(true);
+  };
+
+  const toggleCategorySelection = (cid) => {
+    setSelectedCatIds(prev =>
+      prev.includes(cid) ? prev.filter(id => id !== cid) : [...prev, cid]
+    );
+  };
+
+  const handleSavePot = async () => {
+    if (!potName.trim()) {
+      alert("Please enter a pot name (e.g., Food, Travel).");
+      return;
+    }
+    if (!potLimit || Number(potLimit) < 0) {
+      alert("Please enter a valid planned amount.");
+      return;
+    }
+    if (selectedCatIds.length === 0) {
+      alert("Please select at least one category for this pot.");
+      return;
+    }
+
+    let updatedPots;
+    if (editingPotId) {
+      updatedPots = pots.map(p =>
+        p.id === editingPotId
+          ? { ...p, name: potName.trim(), estimated: Number(potLimit), categoryIds: selectedCatIds }
+          : p
+      );
+    } else {
+      const newPot = {
+        id: uid(),
+        name: potName.trim(),
+        estimated: Number(potLimit),
+        categoryIds: selectedCatIds,
+        color: PIE_COLORS[pots.length % PIE_COLORS.length],
+      };
+      updatedPots = [...pots, newPot];
+    }
+
+    await onSaveMonthPots(currentMonth, updatedPots);
+    setShowPotForm(false);
+    setEditingPotId(null);
+  };
+
+  const handleDeletePot = async (potId) => {
+    const updatedPots = pots.filter(p => p.id !== potId);
+    await onSaveMonthPots(currentMonth, updatedPots);
+    if (activePotId === potId) setActivePotId(null);
+  };
+
+  const handleQuickUpdateEstimate = async () => {
+    if (!activePot || quickEditLimit === "" || Number(quickEditLimit) < 0) return;
+    const updatedPots = pots.map(p =>
+      p.id === activePot.id ? { ...p, estimated: Number(quickEditLimit) } : p
+    );
+    await onSaveMonthPots(currentMonth, updatedPots);
+  };
+
+  const handleCopyFromPrevMonth = async () => {
+    if (!prevMonthPots || prevMonthPots.length === 0) return;
+    const cloned = prevMonthPots.map(p => ({ ...p, id: uid() }));
+    await onSaveMonthPots(currentMonth, cloned);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <MonthNavigator currentMonth={currentMonth} onMonthChange={onMonthChange} title="📈 Analysis" />
+
+      {/* Action Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600 }}>
+          MONTHLY EXPENSE ANALYSIS
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {pots.length === 0 && prevMonthPots?.length > 0 && (
+            <Btn onClick={handleCopyFromPrevMonth} outline style={{ padding: "7px 12px", fontSize: 11 }}>
+              📋 Copy Last Month
+            </Btn>
+          )}
+          <Btn onClick={openCreateForm} style={{ padding: "7px 14px", fontSize: 12 }}>
+            + Create Pot
+          </Btn>
+        </div>
+      </div>
+
+      {/* CREATE / EDIT POT FORM */}
+      {showPotForm && (
+        <Card style={{ border: `1px solid ${COLORS.accent}44` }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: COLORS.accent, marginBottom: 12 }}>
+            {editingPotId ? "✏️ Edit Expense Pot" : "➕ New Expense Pot"}
+          </div>
+
+          <Input
+            label="Pot Name *"
+            value={potName}
+            onChange={setPotName}
+            placeholder="e.g., Shopping & Personal, Food, Travel"
+          />
+
+          <Input
+            label="Planned / Estimated Limit (₹) *"
+            value={potLimit}
+            onChange={setPotLimit}
+            type="number"
+            placeholder="e.g., 5000"
+          />
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+              Select Categories ({selectedCatIds.length} selected)
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {categories.map(cat => {
+                const isSelected = selectedCatIds.includes(cat.id);
+                const otherPotName = assignedElsewhere[cat.id];
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => toggleCategorySelection(cat.id)}
+                    style={{
+                      background: isSelected ? cat.color + "33" : COLORS.bg,
+                      border: isSelected ? `1.5px solid ${cat.color}` : `1px solid ${COLORS.border}`,
+                      borderRadius: 10, padding: "6px 12px",
+                      color: isSelected ? cat.color : COLORS.textMuted,
+                      fontSize: 12, cursor: "pointer", fontWeight: 600,
+                      opacity: otherPotName && !isSelected ? 0.55 : 1,
+                    }}
+                  >
+                    {cat.icon} {cat.name}
+                    {otherPotName && !isSelected ? ` (${otherPotName})` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={handleSavePot} style={{ flex: 1 }}>
+              {editingPotId ? "💾 Update Pot" : "✓ Save Pot"}
+            </Btn>
+            <Btn onClick={() => { setShowPotForm(false); setEditingPotId(null); }} outline style={{ flex: 1 }}>
+              Cancel
+            </Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* 1. SUMMARY TABLE (Category/Pot | Estimated | Current | Balance) */}
+      <Card style={{ padding: "14px 12px", overflowX: "auto" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: COLORS.text, marginBottom: 10, paddingLeft: 4 }}>
+          📊 Monthly Expense Estimate
+        </div>
+
+        {potStats.length === 0 ? (
+          <div style={{ textAlign: "center", color: COLORS.textMuted, padding: "28px 12px", fontSize: 13 }}>
+            No expense pots configured for this month yet. Tap <strong>+ Create Pot</strong> to set your monthly spending limits.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${COLORS.border}`, color: COLORS.textMuted, fontSize: 11, textTransform: "uppercase" }}>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Pot</th>
+                <th style={{ textAlign: "right", padding: "8px 6px" }}>Estimated</th>
+                <th style={{ textAlign: "right", padding: "8px 6px" }}>Current</th>
+                <th style={{ textAlign: "right", padding: "8px 6px" }}>Balance</th>
+                <th style={{ textAlign: "right", padding: "8px 4px" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {potStats.map(pot => (
+                <tr
+                  key={pot.id}
+                  onClick={() => {
+                    setActivePotId(pot.id);
+                    setQuickEditLimit(String(pot.estimated));
+                    setActiveSubCatId(null);
+                  }}
+                  style={{
+                    borderBottom: `1px solid ${COLORS.border}`,
+                    cursor: "pointer",
+                  }}
+                >
+                  <td style={{ padding: "11px 6px", fontWeight: 700, color: COLORS.text }}>
+                    <div>{pot.name}</div>
+                    <div style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: 500 }}>
+                      {pot.categoryBreakdown.map(c => c.name).join(", ")}
+                    </div>
+                  </td>
+                  <td style={{ padding: "11px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace", color: COLORS.textSub }}>
+                    {fmt(pot.estimated)}
+                  </td>
+                  <td style={{ padding: "11px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace", color: COLORS.text, fontWeight: 600 }}>
+                    {fmt(pot.current)}
+                  </td>
+                  <td style={{
+                    padding: "11px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace", fontWeight: 800,
+                    color: pot.balance >= 0 ? COLORS.income : COLORS.expense
+                  }}>
+                    {pot.balance < 0 ? `-${fmt(Math.abs(pot.balance))}` : fmt(pot.balance)}
+                  </td>
+                  <td style={{ padding: "11px 4px", textAlign: "right", whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => openEditForm(pot)}
+                      style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 13, padding: "2px 4px" }}
+                      title="Edit Pot"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => handleDeletePot(pot.id)}
+                      style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 13, padding: "2px 4px" }}
+                      title="Delete Pot"
+                    >
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ background: COLORS.bg, fontWeight: 800 }}>
+                <td style={{ padding: "12px 6px", color: COLORS.accent }}>TOTAL</td>
+                <td style={{ padding: "12px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace", color: COLORS.text }}>
+                  {fmt(totals.estimated)}
+                </td>
+                <td style={{ padding: "12px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace", color: COLORS.text }}>
+                  {fmt(totals.current)}
+                </td>
+                <td style={{
+                  padding: "12px 6px", textAlign: "right", fontFamily: "'DM Mono',monospace",
+                  color: totals.balance >= 0 ? COLORS.income : COLORS.expense
+                }}>
+                  {totals.balance < 0 ? `-${fmt(Math.abs(totals.balance))}` : fmt(totals.balance)}
+                </td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </Card>
+
+      {/* 2. BAR GRAPHS PER POT (Planned vs Current & Available Balance) */}
+      {potStats.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            📉 Progress & Comparison
+          </div>
+
+          {potStats.map(pot => {
+            const maxScale = Math.max(pot.estimated, pot.current, 1);
+            const plannedPct = (pot.estimated / maxScale) * 100;
+            const currentPct = (pot.current / maxScale) * 100;
+            const isOver = pot.balance < 0;
+            const isNear = !isOver && pot.estimated > 0 && pot.current / pot.estimated >= 0.8;
+            const barColor = isOver ? COLORS.expense : isNear ? COLORS.warning : COLORS.accent;
+
+            return (
+              <Card
+                key={pot.id}
+                onClick={() => {
+                  setActivePotId(pot.id);
+                  setQuickEditLimit(String(pot.estimated));
+                  setActiveSubCatId(null);
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 15 }}>{pot.name}</div>
+                    <div style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 2 }}>
+                      {pot.categoryBreakdown.map(c => `${c.icon} ${c.name}`).join("  •  ")}
+                    </div>
+                  </div>
+                  <Tag color={isOver ? COLORS.expense : COLORS.income}>
+                    {isOver ? `Over by ${fmt(Math.abs(pot.balance))}` : `${fmt(pot.balance)} left`}
+                  </Tag>
+                </div>
+
+                {/* Planned Bar */}
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: COLORS.textMuted, marginBottom: 4 }}>
+                    <span>Planned</span>
+                    <span style={{ fontFamily: "'DM Mono',monospace", color: COLORS.textSub }}>{fmt(pot.estimated)}</span>
+                  </div>
+                  <div style={{ background: COLORS.bg, borderRadius: 6, height: 8, overflow: "hidden" }}>
+                    <div style={{ width: `${plannedPct}%`, background: "#7EB8FF", height: "100%", borderRadius: 6, transition: "width 0.4s" }} />
+                  </div>
+                </div>
+
+                {/* Current Spent Bar */}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: COLORS.textMuted, marginBottom: 4 }}>
+                    <span>Current Spent</span>
+                    <span style={{ fontFamily: "'DM Mono',monospace", color: barColor, fontWeight: 700 }}>{fmt(pot.current)}</span>
+                  </div>
+                  <div style={{ background: COLORS.bg, borderRadius: 6, height: 10, overflow: "hidden" }}>
+                    <div style={{ width: `${currentPct}%`, background: barColor, height: "100%", borderRadius: 6, transition: "width 0.4s" }} />
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 3. LEVEL 1 MODAL: POT CATEGORY BREAKDOWN + QUICK ESTIMATE UPDATE */}
+      {activePot && (
+        <Modal
+          title={`📦 ${activePot.name}`}
+          onClose={() => { setActivePotId(null); setActiveSubCatId(null); }}
+        >
+          {/* Quick Update Expected Value Anytime */}
+          <div style={{
+            background: COLORS.bg, borderRadius: 14, padding: "14px",
+            border: `1px solid ${COLORS.border}`, marginBottom: 16
+          }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+              Update Planned Amount (₹)
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="number"
+                value={quickEditLimit}
+                onChange={e => setQuickEditLimit(e.target.value)}
+                style={{
+                  flex: 1, background: COLORS.card, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 10, padding: "8px 12px", color: COLORS.text, fontSize: 14, outline: "none"
+                }}
+              />
+              <Btn onClick={handleQuickUpdateEstimate} style={{ padding: "8px 10px", fontSize: 13 }}>
+                Update
+              </Btn>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
+              <span style={{ color: COLORS.textMuted }}>Spent: <strong style={{ color: COLORS.text }}>{fmt(activePot.current)}</strong></span>
+              <span style={{ color: activePot.balance >= 0 ? COLORS.income : COLORS.expense, fontWeight: 700 }}>
+                Balance: {activePot.balance < 0 ? `-${fmt(Math.abs(activePot.balance))}` : fmt(activePot.balance)}
+              </span>
+            </div>
+          </div>
+
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            Spent By Category (Tap to view entries)
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+            {activePot.categoryBreakdown.map(cat => (
+              <div
+                key={cat.id}
+                onClick={() => setActiveSubCatId(cat.id)}
+                style={{
+                  background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 12, padding: "12px 14px", display: "flex",
+                  alignItems: "center", justifyContent: "space-between", cursor: "pointer"
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 22 }}>{cat.icon}</span>
+                  <div>
+                    <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{cat.name}</div>
+                    <div style={{ color: COLORS.textMuted, fontSize: 11 }}>
+                      {cat.txns.length} transaction{cat.txns.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ color: COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 15 }}>
+                    {fmt(cat.spent)}
+                  </div>
+                  <div style={{ color: COLORS.accent, fontSize: 10, fontWeight: 600 }}>
+                    View Logs →
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={() => { setActivePotId(null); setActiveSubCatId(null); }}
+            style={{
+              width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+              borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+              fontWeight: 700, fontSize: 13, cursor: "pointer"
+            }}
+          >
+            ← Back to Analysis
+          </button>
+        </Modal>
+      )}
+
+      {/* 4. LEVEL 2 SUB-MODAL: CATEGORY TRANSACTIONS (<date, note, amount>) */}
+      {activePot && activeSubCat && (
+        <Modal
+          title={`${activeSubCat.icon} ${activeSubCat.name} — ${fmt(activeSubCat.spent)}`}
+          onClose={() => setActiveSubCatId(null)}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto", marginBottom: 16 }}>
+            {activeSubCat.txns.length === 0 ? (
+              <div style={{ textAlign: "center", color: COLORS.textMuted, padding: "24px 0", fontSize: 13 }}>
+                No expenses recorded under {activeSubCat.name} this month.
+              </div>
+            ) : (
+              activeSubCat.txns.map(t => (
+                <div
+                  key={t.id}
+                  style={{
+                    background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                    borderRadius: 10, padding: "10px 14px",
+                    display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10
+                  }}
+                >
+                  <div style={{ minWidth: 74, color: COLORS.textMuted, fontSize: 11, fontFamily: "'DM Mono',monospace" }}>
+                    {t.date}
+                  </div>
+                  <div style={{ flex: 1, color: COLORS.text, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t.note || activeSubCat.name}
+                  </div>
+                  <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 14, fontFamily: "'DM Mono',monospace" }}>
+                    {fmt(t.amount)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <button
+            onClick={() => setActiveSubCatId(null)}
+            style={{
+              width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+              borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+              fontWeight: 700, fontSize: 13, cursor: "pointer"
+            }}
+          >
+            ← Back to {activePot.name}
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── DUES (RECEIVABLES & TRANSACTION BREAKDOWN) ───────────────────────────────
+function Dues({ people, transactions, categories, accounts, onSelectTxn, onSettlePerson }) {
+  const lend = people.filter(p => p.type === "lend" && p.balance > 0);
+  const [selectedPersonId, setSelectedPersonId] = useState(null);
+
+  const selectedPerson = people.find(p => p.id === selectedPersonId) || null;
+
+  // All active, unsettled transactions linked to the selected person
+  const personTxns = useMemo(() => {
+    if (!selectedPerson) return [];
+    return transactions
+      .filter(t => !t.isDeleted && !t.settledDue && t.personId === selectedPerson.id)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [transactions, selectedPerson]);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>🤝 Dues</div>
-        {/* <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn> */}
+        <div style={{ fontWeight: 800, fontSize: 20, color: COLORS.text }}>🤝 Dues (To Receive)</div>
       </div>
 
-      <div style={{ marginBottom: 8, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
         💰 Money To Receive — {fmt(lend.reduce((s, p) => s + p.balance, 0))} total
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-        {lend.length === 0 ? <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "16px 0" }}>No pending receivables 🎉</div>
-          : lend.map(p => <PersonCard key={p.id} p={p} />)}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {lend.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "24px 0", textAlign: "center" }}>
+            No pending receivables 🎉
+          </div>
+        ) : (
+          lend.map(p => {
+            const count = transactions.filter(t => !t.isDeleted && !t.settledDue && t.personId === p.id).length;
+            return (
+              <Card
+                key={p.id}
+                onClick={() => setSelectedPersonId(p.id)}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}
+              >
+                <div style={{
+                  width: 42, height: 42, borderRadius: 21, background: COLORS.accentDim,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
+                }}>
+                  👤
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                  <div style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 2 }}>
+                    {count > 0 ? `${count} pending transaction${count > 1 ? "s" : ""} • Tap to view` : "Owes you • Tap to settle"}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ color: COLORS.income, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>
+                    {fmt(p.balance)}
+                  </div>
+                  <div style={{ color: COLORS.accent, fontSize: 11, fontWeight: 600, marginTop: 2 }}>
+                    Details →
+                  </div>
+                </div>
+              </Card>
+            );
+          })
+        )}
       </div>
 
-      <div style={{ marginBottom: 8, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-        💸 Money I Owe — {fmt(owe.reduce((s, p) => s + p.balance, 0))} total
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {owe.length === 0 ? <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "16px 0" }}>You're debt free! 🎉</div>
-          : owe.map(p => <PersonCard key={p.id} p={p} />)}
-      </div>
+      {/* PERSON DUE BREAKDOWN MODAL */}
+      {selectedPerson && (
+        <Modal
+          title={`👤 ${selectedPerson.name}'s Dues`}
+          onClose={() => setSelectedPersonId(null)}
+        >
+          {/* Total Summary Banner */}
+          <div style={{
+            background: COLORS.bg, borderRadius: 14, padding: "16px",
+            border: `1px solid ${COLORS.border}`, textAlign: "center", marginBottom: 16
+          }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Total Pending Receivable
+            </div>
+            <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 26, fontFamily: "'DM Mono',monospace", marginTop: 4 }}>
+              {fmt(selectedPerson.balance)}
+            </div>
+          </div>
+
+          {/* Transaction List that built up this due */}
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            Transactions Making Up This Due ({personTxns.length})
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18, maxHeight: 280, overflowY: "auto" }}>
+            {personTxns.length === 0 ? (
+              <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: "16px 0" }}>
+                No individual transaction logs linked to this balance.
+              </div>
+            ) : (
+              personTxns.map(t => {
+                const cat = categories.find(c => c.id === t.categoryId);
+                const acc = accounts?.find(a => a.id === t.accountId);
+                return (
+                  <div
+                    key={t.id}
+                    onClick={() => onSelectTxn(t)}
+                    style={{
+                      background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                      borderRadius: 12, padding: "12px 14px", display: "flex",
+                      alignItems: "center", gap: 12, cursor: "pointer"
+                    }}
+                  >
+                    <div style={{ fontSize: 22 }}>{cat?.icon || "💳"}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>
+                        {t.note || cat?.name || "Expense"}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{t.date}</span>
+                        {acc && <Tag color={acc.color || COLORS.textMuted}>{acc.name}</Tag>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ color: COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 14 }}>
+                        {fmt(t.amount)}
+                      </div>
+                      <div style={{ color: COLORS.accent, fontSize: 10, fontWeight: 600, marginTop: 2 }}>
+                        Open →
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Complete Settlement Action */}
+          {selectedPerson.balance > 0 && (
+            <Btn
+              onClick={async () => {
+                await onSettlePerson(selectedPerson.id);
+                setSelectedPersonId(null);
+              }}
+              color={COLORS.income}
+              style={{ width: "100%", padding: "12px 0", marginBottom: 10 }}
+            >
+              ✓ Complete Due Settlement ({fmt(selectedPerson.balance)})
+            </Btn>
+          )}
+
+          {/* Close / Back Button */}
+          <button
+            onClick={() => setSelectedPersonId(null)}
+            style={{
+              width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+              borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+              fontWeight: 700, fontSize: 13, cursor: "pointer"
+            }}
+          >
+            ← Back to Dues
+          </button>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1185,64 +2042,98 @@ function BalancesScreen({ accounts, transactions, currentMonth, onMonthChange })
   );
 }
 
-// ─── GOALS & LIABILITIES (UPDATED) ───────────────────────────────────────────
-function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal, onDeleteGoal, onAddLiability, onUpdateLiability, onDeleteLiability }) {
-  const [showAddGoal, setShowAddGoal] = useState(false);
+// ─── LIABILITIES (SINGLE PAYMENT DUES & EMI LOANS) ───────────────────────────
+function LiabilitiesScreen({ liabilities, people, onAddPerson, onMarkPersonPaid, onAddLiability, onDeleteLiability }) {
   const [showAddLiab, setShowAddLiab] = useState(false);
-  const [editingItem, setEditingItem] = useState(null); // Tracks if we are editing
+  const [editingItem, setEditingItem] = useState(null);
 
-  // Goal Form State
-  const [gName, setGName] = useState("");
-  const [gTarget, setGTarget] = useState("");
-  const [gIcon, setGIcon] = useState("🎯");
-  const [addSavings, setAddSavings] = useState({});
+  // Liability Entry Mode: "single" (Single Payment Due) | "emi" (EMI Loan)
+  const [liabType, setLiabType] = useState("single");
 
-  // Liability Form State
+  // Single Payment Form State
+  const [personId, setPersonId] = useState("");
+  const [newPersonName, setNewPersonName] = useState("");
+  const [singleAmount, setSingleAmount] = useState("");
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().split("T")[0]);
+  const [singleDueDate, setSingleDueDate] = useState("");
+  const [singleNote, setSingleNote] = useState("");
+
+  // EMI Form State (Preserved from v2.1)
   const [lName, setLName] = useState("");
   const [lTotal, setLTotal] = useState("");
   const [lPaid, setLPaid] = useState("");
   const [lDue, setLDue] = useState("");
   const [lEmi, setLEmi] = useState("");
 
+  const owePeople = people.filter(p => p.type === "owe" && p.balance > 0);
+  const totalSingleOwe = owePeople.reduce((s, p) => s + p.balance, 0);
+  const totalEmiRem = liabilities.reduce((s, l) => s + (l.totalAmount - l.paidAmount), 0);
+
   useEffect(() => {
     if (lTotal && lDue) {
       const remaining = (+lTotal) - (+lPaid || 0);
       const today = new Date();
       const dueDate = new Date(lDue);
-
-      // Calculate month difference
       const months = (dueDate.getFullYear() - today.getFullYear()) * 12 + (dueDate.getMonth() - today.getMonth());
 
       if (months > 0) {
         setLEmi(Math.round(remaining / months));
       } else {
-        setLEmi(remaining); // Due this month or overdue
+        setLEmi(remaining);
       }
     }
   }, [lTotal, lPaid, lDue]);
 
-  const handleAddGoal = () => {
-    if (!gName.trim() || !gTarget || gTarget <= 0) {
-      alert("Please enter a valid name and target amount.");
-      return;
-    }
-    onAddGoal({
-      id: editingItem?.id || uid(),
-      name: gName,
-      targetAmount: +gTarget,
-      savedAmount: editingItem?.savedAmount || 0,
-      icon: gIcon,
-      color: PIE_COLORS[goals.length % PIE_COLORS.length]
-    });
-    resetGoalForm();
+  const resetForm = () => {
+    setLiabType("single");
+    setPersonId("");
+    setNewPersonName("");
+    setSingleAmount("");
+    setEntryDate(new Date().toISOString().split("T")[0]);
+    setSingleDueDate("");
+    setSingleNote("");
+    setLName("");
+    setLTotal("");
+    setLPaid("");
+    setLDue("");
+    setLEmi("");
+    setShowAddLiab(false);
+    setEditingItem(null);
   };
 
-  const handleAddLiability = () => {
-    if (!lName.trim() || !lTotal || lTotal <= 0) {
-      alert("Please enter a valid name and total amount.");
+  const handleSaveLiability = async () => {
+    if (liabType === "single") {
+      if (!singleAmount || +singleAmount <= 0) {
+        alert("Please enter a valid amount.");
+        return;
+      }
+      if (!personId || (personId === "NEW" && !newPersonName.trim())) {
+        alert("Please select or enter a person's name.");
+        return;
+      }
+
+      const selectedExisting = people.find(p => p.id === personId);
+      const resolvedName = personId === "NEW" ? newPersonName.trim() : selectedExisting?.name;
+
+      await onAddPerson({
+        name: resolvedName,
+        balance: +singleAmount,
+        type: "owe",
+        entryDate,
+        dueDate: singleDueDate || "",
+        note: singleNote.trim()
+      });
+
+      resetForm();
       return;
     }
-    onAddLiability({
+
+    // EMI Type
+    if (!lName.trim() || !lTotal || +lTotal <= 0) {
+      alert("Please enter a valid lender name and total amount.");
+      return;
+    }
+    await onAddLiability({
       id: editingItem?.id || uid(),
       name: lName,
       totalAmount: +lTotal,
@@ -1250,163 +2141,213 @@ function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal, onDeleteGoal
       dueDate: lDue || "N/A",
       emi: +lEmi || 0
     });
-    resetLiabForm();
-  };
-
-  const resetGoalForm = () => {
-    setGName(""); setGTarget(""); setGIcon("🎯"); setShowAddGoal(false); setEditingItem(null);
-  };
-
-  const resetLiabForm = () => {
-    setLName(""); setLTotal(""); setLPaid(""); setLDue(""); setLEmi(""); setShowAddLiab(false); setEditingItem(null);
-  };
-
-  const startEditGoal = (g) => {
-    setEditingItem(g); setGName(g.name); setGTarget(g.targetAmount); setGIcon(g.icon); setShowAddGoal(true);
+    resetForm();
   };
 
   const startEditLiab = (l) => {
-    setEditingItem(l); setLName(l.name); setLTotal(l.totalAmount); setLPaid(l.paidAmount); setLDue(l.dueDate); setLEmi(l.emi); setShowAddLiab(true);
+    setEditingItem(l);
+    setLiabType("emi");
+    setLName(l.name);
+    setLTotal(l.totalAmount);
+    setLPaid(l.paidAmount);
+    setLDue(l.dueDate);
+    setLEmi(l.emi);
+    setShowAddLiab(true);
   };
 
   return (
     <div>
-      <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text, marginBottom: 16 }}>🎯 Goals & Liabilities</div>
-
-      {/* --- SAVING GOALS SECTION --- */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Saving Goals</div>
-        <Btn onClick={() => setShowAddGoal(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Goal</Btn>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>🏦 Liabilities</div>
+        <Btn onClick={() => { resetForm(); setShowAddLiab(true); }} style={{ padding: "8px 14px", fontSize: 12 }}>
+          + Add Liability
+        </Btn>
       </div>
 
-      {showAddGoal && (
-        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.accent}44` }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.accent }}>{editingItem ? "Edit Goal" : "New Saving Goal"}</div>
-          <Input label="Goal Name *" value={gName} onChange={setGName} placeholder="e.g. New Car" />
-          <Input label="Target Amount (₹) *" value={gTarget} onChange={setGTarget} type="number" placeholder="0" />
-          <Input label="Icon (emoji)" value={gIcon} onChange={setGIcon} placeholder="🎯" />
+      {/* Total Summary Banner */}
+      <Card style={{ marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Total Payables & Loans
+          </div>
+          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 22, fontFamily: "'DM Mono',monospace", marginTop: 4 }}>
+            {fmt(totalSingleOwe + totalEmiRem)}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 11, color: COLORS.textSub }}>
+          <div>Dues I Owe: <strong style={{ color: COLORS.text }}>{fmt(totalSingleOwe)}</strong></div>
+          <div style={{ marginTop: 2 }}>EMI Loans: <strong style={{ color: COLORS.text }}>{fmt(totalEmiRem)}</strong></div>
+        </div>
+      </Card>
+
+      {/* ADD / EDIT LIABILITY FORM */}
+      {showAddLiab && (
+        <Card style={{ marginBottom: 18, border: `1px solid ${COLORS.expense}44` }}>
+          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.expense }}>
+            {editingItem ? "Edit EMI Liability" : "New Liability"}
+          </div>
+
+          {!editingItem && (
+            <Toggle
+              value={liabType}
+              onChange={setLiabType}
+              options={[
+                { value: "single", label: "👤 Single Payment", color: COLORS.pending },
+                { value: "emi", label: "🏦 EMI Type", color: COLORS.expense }
+              ]}
+            />
+          )}
+
+          {liabType === "single" ? (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                  Person *
+                </div>
+                <select
+                  value={personId}
+                  onChange={e => setPersonId(e.target.value)}
+                  style={{
+                    width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                    borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+                    fontSize: 14, outline: "none", marginBottom: personId === "NEW" ? 8 : 0
+                  }}
+                >
+                  <option value="">Select person...</option>
+                  {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <option value="NEW">+ Type New Person</option>
+                </select>
+
+                {personId === "NEW" && (
+                  <Input
+                    placeholder="Enter person's name..."
+                    value={newPersonName}
+                    onChange={setNewPersonName}
+                  />
+                )}
+              </div>
+
+              <Input label="Amount (₹) *" value={singleAmount} onChange={setSingleAmount} type="number" placeholder="0" />
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Entry Date" value={entryDate} onChange={setEntryDate} type="date" />
+                <Input label="Due On" value={singleDueDate} onChange={setSingleDueDate} type="date" />
+              </div>
+
+              <Input label="Note" value={singleNote} onChange={setSingleNote} placeholder="e.g., Borrowed for fuel, split dinner..." />
+            </>
+          ) : (
+            <>
+              <Input label="Lender Name *" value={lName} onChange={setLName} placeholder="e.g. Home Loan" />
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Total Amount *" value={lTotal} onChange={setLTotal} type="number" placeholder="0" />
+                <Input label="Already Paid" value={lPaid} onChange={setLPaid} type="number" placeholder="0" />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Final Due Date *" value={lDue} onChange={setLDue} type="date" />
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>
+                    Auto-calculated EMI
+                  </div>
+                  <div style={{
+                    background: COLORS.bg, padding: "10px 14px", borderRadius: 10,
+                    color: COLORS.accent, fontWeight: 700, border: `1px solid ${COLORS.border}`
+                  }}>
+                    {fmt(lEmi)}/mo
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAddGoal} style={{ flex: 1 }}>{editingItem ? "Update" : "Add Goal"}</Btn>
-            <Btn onClick={resetGoalForm} outline style={{ flex: 1 }}>Cancel</Btn>
+            <Btn onClick={handleSaveLiability} color={COLORS.expense} style={{ flex: 1, color: "#fff" }}>
+              {editingItem ? "Update Liability" : "Save Liability"}
+            </Btn>
+            <Btn onClick={resetForm} outline style={{ flex: 1 }}>Cancel</Btn>
           </div>
         </Card>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-        {goals.map(g => (
-          <Card key={g.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 22 }}>{g.icon}</span>
-                <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{g.name}</span>
+      {/* --- SECTION 1: SINGLE PAYMENT DUES (MONEY I OWE) --- */}
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        💸 Single Payment Dues (Money I Owe) — {fmt(totalSingleOwe)}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+        {owePeople.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "12px 0" }}>No single payment dues 🎉</div>
+        ) : (
+          owePeople.map(p => (
+            <Card key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: 20, background: COLORS.expenseDim,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
+              }}>
+                👤
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => startEditGoal(g)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
-                <button onClick={() => onDeleteGoal(g.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{p.name}</div>
+                {p.note && <div style={{ color: COLORS.textSub, fontSize: 12, marginTop: 2 }}>{p.note}</div>}
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  {p.entryDate && <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Added: {p.entryDate}</span>}
+                  {p.dueDate && <Tag color={COLORS.expense}>Due: {p.dueDate}</Tag>}
+                </div>
               </div>
-            </div>
-
-            <ProgressBar value={g.savedAmount} max={g.targetAmount} color={g.color} height={10} />
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-              <span style={{ color: COLORS.textMuted, fontSize: 12 }}>{fmt(g.savedAmount)} / {fmt(g.targetAmount)} ({Math.round((g.savedAmount / g.targetAmount) * 100)}%)</span>
-
-              {/* LARGER ADD MONEY UI */}
-              <div style={{ display: "flex", gap: 6, flex: "1 1 150px", justifyContent: "flex-end" }}>
-                <input
-                  type="number"
-                  placeholder="+ amount"
-                  value={addSavings[g.id] || ""}
-                  onChange={e => setAddSavings(s => ({ ...s, [g.id]: e.target.value }))}
-                  style={{
-                    flex: 1, maxWidth: 100, background: COLORS.bg, border: `1px solid ${COLORS.border}`,
-                    borderRadius: 10, padding: "8px 12px", color: COLORS.text, fontSize: 14, outline: "none"
-                  }}
-                />
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                <div style={{ color: COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>
+                  {fmt(p.balance)}
+                </div>
                 <button
-                  onClick={() => {
-                    if (!addSavings[g.id]) return;
-                    onUpdateGoal(g.id, Math.min(g.targetAmount, g.savedAmount + +addSavings[g.id]));
-                    setAddSavings(s => ({ ...s, [g.id]: "" }));
-                  }}
-                  style={{ background: COLORS.accent, border: "none", borderRadius: 10, padding: "8px 16px", color: "#000", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-                  Add
+                  onClick={() => onMarkPersonPaid(p.id)}
+                  style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                >
+                  ✓ Settled
                 </button>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          ))
+        )}
       </div>
 
-      {/* --- LIABILITIES SECTION --- */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Liabilities (Loans/EMI)</div>
-        <Btn onClick={() => setShowAddLiab(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Debt</Btn>
+      {/* --- SECTION 2: EMI LOANS --- */}
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        🏦 EMI Loans — {fmt(totalEmiRem)} remaining
       </div>
-
-      {showAddLiab && (
-        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.expense}44` }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.expense }}>
-            {editingItem ? "Edit Liability" : "New Liability"}
-          </div>
-          <Input label="Lender Name *" value={lName} onChange={setLName} placeholder="e.g. Home Loan" />
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="Total Amount *" value={lTotal} onChange={setLTotal} type="number" placeholder="0" />
-            <Input label="Already Paid" value={lPaid} onChange={setLPaid} type="number" placeholder="0" />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="Final Due Date *" value={lDue} onChange={setLDue} type="date" />
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>
-                Auto-calculated EMI
-              </div>
-              <div style={{
-                background: COLORS.bg, padding: "10px 14px", borderRadius: 10,
-                color: COLORS.accent, fontWeight: 700, border: `1px solid ${COLORS.border}`
-              }}>
-                {fmt(lEmi)}/mo
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAddLiability} color={COLORS.expense} style={{ flex: 1, color: "#fff" }}>
-              {editingItem ? "Update Liability" : "Add Liability"}
-            </Btn>
-            <Btn onClick={resetLiabForm} outline style={{ flex: 1 }}>Cancel</Btn>
-          </div>
-        </Card>
-      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {liabilities.map(l => (
-          <Card key={l.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>🏦 {l.name}</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Tag color={COLORS.expense}>Due: {l.dueDate}</Tag>
-                <button onClick={() => startEditLiab(l)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
-                <button onClick={() => onDeleteLiability(l.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+        {liabilities.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "12px 0" }}>No active EMI loans</div>
+        ) : (
+          liabilities.map(l => (
+            <Card key={l.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>🏦 {l.name}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Tag color={COLORS.expense}>Due: {l.dueDate}</Tag>
+                  <button onClick={() => startEditLiab(l)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
+                  <button onClick={() => onDeleteLiability(l.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+                </div>
               </div>
-            </div>
 
-            <ProgressBar value={l.paidAmount} max={l.totalAmount} color={COLORS.warning} height={10} />
+              <ProgressBar value={l.paidAmount} max={l.totalAmount} color={COLORS.warning} height={10} />
 
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
-              <span style={{ color: COLORS.textMuted }}>Paid: {fmt(l.paidAmount)}</span>
-              <span style={{ color: COLORS.expense, fontWeight: 700 }}>Rem: {fmt(l.totalAmount - l.paidAmount)}</span>
-            </div>
-
-            {l.emi > 0 && (
-              <div style={{ marginTop: 8, padding: "8px 12px", background: COLORS.bg, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Monthly EMI:</span>
-                <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{fmt(l.emi)}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
+                <span style={{ color: COLORS.textMuted }}>Paid: {fmt(l.paidAmount)}</span>
+                <span style={{ color: COLORS.expense, fontWeight: 700 }}>Rem: {fmt(l.totalAmount - l.paidAmount)}</span>
               </div>
-            )}
-          </Card>
-        ))}
+
+              {l.emi > 0 && (
+                <div style={{ marginTop: 8, padding: "8px 12px", background: COLORS.bg, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Monthly EMI:</span>
+                  <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{fmt(l.emi)}</span>
+                </div>
+              )}
+            </Card>
+          ))
+        )}
       </div>
     </div>
   );
@@ -1829,6 +2770,7 @@ const PageTransition = ({ children, k }) => (
 export default function PocketLedger() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [transactions, setTransactions] = useState([]);
+  const [monthlyPots, setMonthlyPots] = useState({});
   const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7));
 
   const [accounts, setAccounts] = useState([
@@ -1842,6 +2784,7 @@ export default function PocketLedger() {
   const [liabilities, setLiabilities] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editTxn, setEditTxn] = useState(null);
+  const [selectedTxn, setSelectedTxn] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1998,6 +2941,33 @@ export default function PocketLedger() {
     if (user) setupReminders();
   }, [user]);
 
+  // Fetch Monthly Expense Pots
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, "users", user.uid, "monthlyPots");
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const potsMap = {};
+      snapshot.docs.forEach(docSnap => {
+        potsMap[docSnap.id] = docSnap.data().pots || [];
+      });
+      setMonthlyPots(potsMap);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const saveMonthPots = async (monthKey, updatedPots) => {
+    if (!user) return;
+    try {
+      const potDocRef = doc(db, "users", user.uid, "monthlyPots", monthKey);
+      await setDoc(potDocRef, {
+        pots: updatedPots,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error("Save Month Pots Error:", error);
+    }
+  };
+
   useEffect(() => {
     if (!user) return;
     const q = collection(db, "users", user.uid, "people");
@@ -2010,8 +2980,6 @@ export default function PocketLedger() {
     });
     return () => unsubscribe();
   }, [user]);
-
-  // --- ADD THESE TWO NEW USE-EFFECTS ---
 
   // Fetch Goals
   useEffect(() => {
@@ -2083,7 +3051,6 @@ export default function PocketLedger() {
     if (!user) return null;
 
     try {
-      // Fixed: Duplicate entry protection based on name
       const existing = people.find(p => p.name.toLowerCase() === personData.name.toLowerCase());
 
       if (existing) {
@@ -2105,6 +3072,9 @@ export default function PocketLedger() {
         await updateDoc(ref, {
           balance: newBalance,
           type: newType,
+          ...(personData.entryDate !== undefined && { entryDate: personData.entryDate }),
+          ...(personData.dueDate !== undefined && { dueDate: personData.dueDate }),
+          ...(personData.note !== undefined && { note: personData.note }),
           updatedAt: serverTimestamp()
         });
         return existing.id;
@@ -2113,6 +3083,9 @@ export default function PocketLedger() {
           name: personData.name,
           balance: personData.balance,
           type: personData.type,
+          ...(personData.entryDate && { entryDate: personData.entryDate }),
+          ...(personData.dueDate && { dueDate: personData.dueDate }),
+          ...(personData.note && { note: personData.note }),
           createdAt: serverTimestamp(),
         });
         return docRef.id;
@@ -2172,22 +3145,45 @@ export default function PocketLedger() {
       const { id, ...data } = txnData;
 
       if (id) {
+        const oldTxn = transactions.find(t => t.id === id);
         const txnRef = doc(db, "users", user.uid, "transactions", id);
         await updateDoc(txnRef, { ...data, updatedAt: serverTimestamp() });
+
+        // Adjust person due balance if an active "other" expense was edited
+        if (oldTxn && !oldTxn.settledDue) {
+          if (oldTxn.type === "expense" && oldTxn.spendType === "other" && oldTxn.personId) {
+            const oldPerson = people.find(p => p.id === oldTxn.personId);
+            if (oldPerson) {
+              const newBal = Math.max(0, oldPerson.balance - oldTxn.amount);
+              await updateDoc(doc(db, "users", user.uid, "people", oldTxn.personId), { balance: newBal });
+            }
+          }
+          if (data.type === "expense" && data.spendType === "other" && data.personId) {
+            await updateDoc(doc(db, "users", user.uid, "people", data.personId), { balance: increment(data.amount) });
+          }
+        }
+
+        const updatedObj = { ...data, id, isDeleted: false };
+        setSelectedTxn(updatedObj);
       } else {
-        await addDoc(collection(db, "users", user.uid, "transactions"), {
+        const docRef = await addDoc(collection(db, "users", user.uid, "transactions"), {
           ...data,
           createdAt: serverTimestamp(),
-          isDeleted: false
+          isDeleted: false,
+          settledDue: false,
         });
 
         if (data.type === "expense" && data.spendType === "other" && data.personId) {
           const personRef = doc(db, "users", user.uid, "people", data.personId);
           await updateDoc(personRef, { balance: increment(data.amount) });
         }
+
+        // Open the single transaction detailed view right after entry
+        const createdObj = { ...data, id: docRef.id, isDeleted: false, settledDue: false };
+        setActiveTab("transactions");
+        setSelectedTxn(createdObj);
       }
 
-      // Re-calculate and sync widget
       const updatedTxns = id
         ? transactions.map(t => t.id === id ? { ...data, id, isDeleted: false } : t)
         : [...transactions, { ...data, id: "temp", isDeleted: false }];
@@ -2199,8 +3195,44 @@ export default function PocketLedger() {
     }
   };
 
+  const markTxnDuePaid = async (txn) => {
+    if (!user || !txn) return;
+    try {
+      // 1. Reduce the person's due balance by this transaction's amount
+      if (txn.personId) {
+        const person = people.find(p => p.id === txn.personId);
+        if (person) {
+          const updatedBal = Math.max(0, person.balance - txn.amount);
+          await updateDoc(doc(db, "users", user.uid, "people", txn.personId), {
+            balance: updatedBal,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      // 2. Soft-delete the transaction to Trash & mark as settled
+      const txnRef = doc(db, "users", user.uid, "transactions", txn.id);
+      await updateDoc(txnRef, {
+        isDeleted: true,
+        settledDue: true,
+        deletedAt: serverTimestamp(),
+      });
+
+      // 3. Close detail modal & refresh widget balances
+      setSelectedTxn(null);
+      const updatedTxns = transactions.map(t =>
+        t.id === txn.id ? { ...t, isDeleted: true, settledDue: true } : t
+      );
+      await syncRefreshedBalances(updatedTxns);
+    } catch (error) {
+      console.error("Mark Txn Due Paid Error:", error);
+    }
+  };
+
   const deleteTransaction = (id) => {
     if (!user) return;
+    const targetTxn = transactions.find(t => t.id === id);
+
     setConfirmDialog({
       title: "Delete Transaction",
       message: "Are you sure you want to delete this transaction? It will be moved to the trash.",
@@ -2209,10 +3241,21 @@ export default function PocketLedger() {
           const txnRef = doc(db, "users", user.uid, "transactions", id);
           await updateDoc(txnRef, { isDeleted: true, deletedAt: serverTimestamp() });
 
-          // ─── SYNC WIDGET AFTER DELETION ───
+          // If it was an unsettled due transaction, also deduct from the person's due balance
+          if (targetTxn && targetTxn.type === "expense" && targetTxn.spendType === "other" && targetTxn.personId && !targetTxn.settledDue) {
+            const person = people.find(p => p.id === targetTxn.personId);
+            if (person) {
+              const updatedBal = Math.max(0, person.balance - targetTxn.amount);
+              await updateDoc(doc(db, "users", user.uid, "people", targetTxn.personId), {
+                balance: updatedBal,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+
+          setSelectedTxn(null);
           const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: true } : t);
           syncRefreshedBalances(updatedTxns);
-          // ───────────────────────────────────
         } catch (error) {
           console.error("Delete Error:", error);
         }
@@ -2223,14 +3266,22 @@ export default function PocketLedger() {
 
   const restoreTransaction = async (id) => {
     if (!user) return;
+    const targetTxn = transactions.find(t => t.id === id);
+
     try {
       const txnRef = doc(db, "users", user.uid, "transactions", id);
-      await updateDoc(txnRef, { isDeleted: false });
+      await updateDoc(txnRef, { isDeleted: false, settledDue: false });
 
-      // ─── SYNC WIDGET AFTER RESTORATION ───
-      const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: false } : t);
+      // Re-add to person's due balance if it was a "For Someone" transaction
+      if (targetTxn && targetTxn.type === "expense" && targetTxn.spendType === "other" && targetTxn.personId) {
+        await updateDoc(doc(db, "users", user.uid, "people", targetTxn.personId), {
+          balance: increment(targetTxn.amount),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: false, settledDue: false } : t);
       syncRefreshedBalances(updatedTxns);
-      // ─────────────────────────────────────
     } catch (error) {
       console.error("Restore Error:", error);
     }
@@ -2246,6 +3297,44 @@ export default function PocketLedger() {
       });
     } catch (error) {
       console.error("Mark Paid Error:", error);
+    }
+  };
+
+  const settlePersonDues = async (id) => {
+    if (!user) return;
+    try {
+      // 1. Zero out the person's receivable balance
+      const ref = doc(db, "users", user.uid, "people", id);
+      await updateDoc(ref, {
+        balance: 0,
+        updatedAt: serverTimestamp(),
+      });
+
+      // 2. Mark all active due transactions for this person as paid & soft-delete to Trash
+      const personTxns = transactions.filter(
+        t => !t.isDeleted && !t.settledDue && t.personId === id
+      );
+
+      if (personTxns.length > 0) {
+        await Promise.all(
+          personTxns.map(t =>
+            updateDoc(doc(db, "users", user.uid, "transactions", t.id), {
+              isDeleted: true,
+              settledDue: true,
+              deletedAt: serverTimestamp(),
+            })
+          )
+        );
+
+        // 3. Refresh widget balances
+        const settledIds = new Set(personTxns.map(t => t.id));
+        const updatedTxns = transactions.map(t =>
+          settledIds.has(t.id) ? { ...t, isDeleted: true, settledDue: true } : t
+        );
+        await syncRefreshedBalances(updatedTxns);
+      }
+    } catch (error) {
+      console.error("Settle Person Dues Error:", error);
     }
   };
 
@@ -2285,7 +3374,7 @@ export default function PocketLedger() {
     { id: "dashboard", label: "Home", icon: "🏠" },
     { id: "transactions", label: "Logs", icon: "📋" },
     { id: "add", label: "Add", icon: "➕" },
-    { id: "dues", label: "Dues", icon: "🤝" },
+    { id: "analysis", label: "Analysis", icon: "📈" },
     { id: "balances", label: "Balances", icon: "💳" },
   ];
 
@@ -2293,34 +3382,72 @@ export default function PocketLedger() {
     { id: "dashboard", icon: "🏠", label: "Dashboard" },
     { id: "transactions", icon: "📋", label: "Transactions" },
     { id: "dues", icon: "🤝", label: "Dues" },
+    { id: "liabilities", icon: "🏦", label: "Liabilities" },
+    { id: "analysis", icon: "📈", label: "Analysis" },
     { id: "balances", icon: "💳", label: "Balances" },
     { id: "sheet", icon: "📊", label: "Excel Sheet" },
-    { id: "goals", icon: "🎯", label: "Goals" },
     { id: "categories", icon: "⚙️", label: "Categories" },
   ];
 
   const renderScreen = () => {
     switch (activeTab) {
-      case "dashboard": return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
-      case "transactions": return <Transactions transactions={transactions} categories={categories} people={people}
-        onDelete={deleteTransaction}
-        onRestore={restoreTransaction}
-        onEdit={t => { setEditTxn(t); setShowAddModal(true); }}
-        accounts={accounts}
-        currentMonth={currentMonth}
-        onMonthChange={setCurrentMonth} />;
-      case "dues":
-        return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
-      case "balances":
-        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
-      case "goals":
+      case "dashboard":
         return (
-          <GoalsScreen
+          <Dashboard
+            transactions={transactions}
+            categories={categories}
+            people={people}
             goals={goals}
             liabilities={liabilities}
-            onAddGoal={saveGoal}
-            onUpdateGoal={(id, saved) => saveGoal({ id, savedAmount: saved })}
-            onDeleteGoal={deleteGoal}
+            pots={monthlyPots[currentMonth] || []}
+            currentMonth={currentMonth}
+            onMonthChange={setCurrentMonth}
+          />
+        );
+      case "transactions":
+        return <Transactions transactions={transactions} categories={categories} people={people}
+          onSelectTxn={t => setSelectedTxn(t)}
+          onRestore={restoreTransaction}
+          accounts={accounts}
+          currentMonth={currentMonth}
+          onMonthChange={setCurrentMonth} />;
+      case "analysis": {
+        const [y, m] = currentMonth.split("-").map(Number);
+        const prevDate = new Date(y, m - 2, 1);
+        const prevMonthKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+
+        return (
+          <AnalysisScreen
+            transactions={transactions}
+            categories={categories}
+            currentMonth={currentMonth}
+            onMonthChange={setCurrentMonth}
+            pots={monthlyPots[currentMonth] || []}
+            prevMonthPots={monthlyPots[prevMonthKey] || []}
+            onSaveMonthPots={saveMonthPots}
+          />
+        );
+      }
+      case "dues":
+        return (
+          <Dues
+            people={people}
+            transactions={transactions}
+            categories={categories}
+            accounts={accounts}
+            onSelectTxn={t => setSelectedTxn(t)}
+            onSettlePerson={settlePersonDues}
+          />
+        );
+      case "balances":
+        return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
+      case "liabilities":
+        return (
+          <LiabilitiesScreen
+            liabilities={liabilities}
+            people={people}
+            onAddPerson={addPerson}
+            onMarkPersonPaid={markPersonPaid}
             onAddLiability={saveLiability}
             onDeleteLiability={deleteLiability}
           />
@@ -2341,7 +3468,8 @@ export default function PocketLedger() {
           currentMonth={currentMonth}
           onMonthChange={setCurrentMonth}
         />;
-      default: return null;
+      default:
+        return null;
     }
   };
 
@@ -2655,6 +3783,22 @@ export default function PocketLedger() {
             onClose={() => { setShowAddModal(false); setEditTxn(null); }}
           />
         </Modal>
+      )}
+      {selectedTxn && (
+        <TransactionDetailModal
+          txn={selectedTxn}
+          categories={categories}
+          people={people}
+          accounts={accounts}
+          onClose={() => setSelectedTxn(null)}
+          onEdit={(t) => {
+            setSelectedTxn(null);
+            setEditTxn(t);
+            setShowAddModal(true);
+          }}
+          onDelete={deleteTransaction}
+          onMarkDuePaid={markTxnDuePaid}
+        />
       )}
       {confirmDialog && (
         <ConfirmModal
