@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Capacitor } from '@capacitor/core';
 import { NativeBiometric } from 'capacitor-native-biometric';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { registerPlugin } from '@capacitor/core';
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -50,6 +51,21 @@ const getMonthTxns = (transactions, monthKey) => {
     const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
     return key === monthKey;
   });
+};
+
+const WidgetBridge = registerPlugin('WidgetBridge');
+
+const syncBalancesToWidget = async (sbiBal, hdfcBal, cashBal, totalBal) => {
+  try {
+    await WidgetBridge.updateBalances({
+      sbi: sbiBal,
+      fed: hdfcBal,
+      cash: cashBal,
+      total: totalBal
+    });
+  } catch (e) {
+    console.log("Widget sync available only on native Android app");
+  }
 };
 
 // ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
@@ -644,28 +660,28 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     "spotify": "Misc"
   };
 
-  const 
-  handleNoteChange = (val) => {
-    setNote(val);
-    const lower = val.toLowerCase().trim();
+  const
+    handleNoteChange = (val) => {
+      setNote(val);
+      const lower = val.toLowerCase().trim();
 
-    if (!lower) {
-      return;
-    }
-
-    // Search through mapping keys to see if the note contains any keyword
-    let matchedSubCat = "";
-    for (const [keyword, subCat] of Object.entries(subCategoryMapping)) {
-      if (lower.includes(keyword)) {
-        matchedSubCat = subCat;
-        break; // Conflict resolution: takes the first matched keyword encountered
+      if (!lower) {
+        return;
       }
-    }
 
-    if (matchedSubCat) {
-      setSubNote(matchedSubCat);
-    }
-  };
+      // Search through mapping keys to see if the note contains any keyword
+      let matchedSubCat = "";
+      for (const [keyword, subCat] of Object.entries(subCategoryMapping)) {
+        if (lower.includes(keyword)) {
+          matchedSubCat = subCat;
+          break; // Conflict resolution: takes the first matched keyword encountered
+        }
+      }
+
+      if (matchedSubCat) {
+        setSubNote(matchedSubCat);
+      }
+    };
 
   const handleSubmit = async () => {
     if (!amount || isNaN(+amount)) return;
@@ -2044,6 +2060,25 @@ export default function PocketLedger() {
     return () => unsubscribe();
   }, [user]);
 
+  const syncRefreshedBalances = async (currentTxns) => {
+    const balancesMap = { bank_secondary: 0, bank_primary: 0, cash: 0 };
+    let totalLiquid = 0;
+
+    accounts.forEach(acc => {
+      const accTxns = currentTxns.filter(t => !t.isDeleted && t.accountId === acc.id);
+      const bal = accTxns.reduce((s, t) => t.type === "income" ? s + t.amount : s - t.amount, 0);
+      balancesMap[acc.id] = bal;
+      totalLiquid += bal;
+    });
+
+    await syncBalancesToWidget(
+      balancesMap["bank_secondary"] || 0,
+      balancesMap["bank_primary"] || 0,
+      balancesMap["cash"] || 0,
+      totalLiquid
+    );
+  };
+
   const addPerson = async (personData) => {
     if (!user) return null;
 
@@ -2137,15 +2172,10 @@ export default function PocketLedger() {
       const { id, ...data } = txnData;
 
       if (id) {
-        // Edit flow
         const txnRef = doc(db, "users", user.uid, "transactions", id);
-        await updateDoc(txnRef, {
-          ...data,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(txnRef, { ...data, updatedAt: serverTimestamp() });
       } else {
-        // Create flow
-        const docRef = await addDoc(collection(db, "users", user.uid, "transactions"), {
+        await addDoc(collection(db, "users", user.uid, "transactions"), {
           ...data,
           createdAt: serverTimestamp(),
           isDeleted: false
@@ -2153,11 +2183,17 @@ export default function PocketLedger() {
 
         if (data.type === "expense" && data.spendType === "other" && data.personId) {
           const personRef = doc(db, "users", user.uid, "people", data.personId);
-          await updateDoc(personRef, {
-            balance: increment(data.amount)
-          });
+          await updateDoc(personRef, { balance: increment(data.amount) });
         }
       }
+
+      // Re-calculate and sync widget
+      const updatedTxns = id
+        ? transactions.map(t => t.id === id ? { ...data, id, isDeleted: false } : t)
+        : [...transactions, { ...data, id: "temp", isDeleted: false }];
+
+      await syncRefreshedBalances(updatedTxns);
+
     } catch (error) {
       console.error("Save Transaction Error:", error);
     }
@@ -2172,6 +2208,11 @@ export default function PocketLedger() {
         try {
           const txnRef = doc(db, "users", user.uid, "transactions", id);
           await updateDoc(txnRef, { isDeleted: true, deletedAt: serverTimestamp() });
+
+          // ─── SYNC WIDGET AFTER DELETION ───
+          const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: true } : t);
+          syncRefreshedBalances(updatedTxns);
+          // ───────────────────────────────────
         } catch (error) {
           console.error("Delete Error:", error);
         }
@@ -2185,6 +2226,11 @@ export default function PocketLedger() {
     try {
       const txnRef = doc(db, "users", user.uid, "transactions", id);
       await updateDoc(txnRef, { isDeleted: false });
+
+      // ─── SYNC WIDGET AFTER RESTORATION ───
+      const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: false } : t);
+      syncRefreshedBalances(updatedTxns);
+      // ─────────────────────────────────────
     } catch (error) {
       console.error("Restore Error:", error);
     }
