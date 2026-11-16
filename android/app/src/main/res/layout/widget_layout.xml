@@ -22,7 +22,7 @@
         </LinearLayout>
 
         <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical" android:gravity="center" android:padding="2dp">
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="FEDERAL" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="HDFC" android:textColor="#6B7A99" android:textSize="10sp" android:textStyle="bold" android:textAllCaps="true" />
             <TextView android:id="@+id/val_federal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₹0" android:textColor="#F0F4FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginTop="2dp" />
         </LinearLayout>
 

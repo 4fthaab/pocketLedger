@@ -4,7 +4,7 @@
 
 ## 🚀 Key Features
 
-* **Multi-Account Tracking**: Manage cumulative balances across various accounts including Cash in Hand, SBI, and Federal Bank.
+* **Multi-Account Tracking**: Manage cumulative balances across various accounts including Cash in Hand, SBI, and HDFC.
 * **Dynamic Excel Sheet View**: A unique, scrollable ledger view that mimics a professional spreadsheet, allowing you to track running totals and export data to `.xlsx`.
 * **Smart Transfer Logic**: Automatically handles internal transfers between accounts (e.g., Bank to Cash) as sequential transactions to maintain accurate historical balances.
 * **Debt & Dues Management**: Dedicated modules for "Lend/Owe" (Dues) and long-term Liabilities (Loans/EMIs) with progress tracking.
