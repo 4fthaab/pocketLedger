@@ -933,8 +933,9 @@ function AddTransaction({ categories, people, transactions = [], onAdd, onAddPer
     </div>
   );
 }
+
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-function Transactions({ transactions, categories, people, accounts, onDelete, onEdit, onRestore, currentMonth, onMonthChange }) {
+function Transactions({ transactions, categories, people, accounts, onSelectTxn, onRestore, currentMonth, onMonthChange }) {
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -942,27 +943,19 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
 
   const filtered = useMemo(() => {
     return transactions.filter(t => {
-      // 1. Month Filter (Only show transactions matching currentMonth)
       if (t.date) {
-        const tMonth = t.date.slice(0, 7); // Extracts "YYYY-MM"
+        const tMonth = t.date.slice(0, 7);
         if (tMonth !== currentMonth) return false;
       }
 
-      // 2. Trash Filter
       if (showDeleted ? !t.isDeleted : t.isDeleted) return false;
-
-      // 3. Type Filter
       if (filterType !== "all" && t.type !== filterType) return false;
-
-      // 4. Category Filter
       if (filterCat !== "all" && t.categoryId !== filterCat) return false;
 
-      // 5. Search Filter
       const cat = categories.find(c => c.id === t.categoryId);
       const person = t.personId ? people.find(p => p.id === t.personId) : null;
-      const acc = accounts?.find(a => a.id === t.accountId); // Fixed: accountID -> accountId
+      const acc = accounts?.find(a => a.id === t.accountId);
 
-      // Added acc?.name so you can search by Bank name too!
       const searchStr = `${t.note || ""} ${t.subNote || ""} ${cat?.name || ""} ${person?.name || ""} ${acc?.name || ""}`.toLowerCase();
       if (search && !searchStr.includes(search.toLowerCase())) return false;
 
@@ -971,17 +964,14 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
       const dateA = new Date(a.date);
       const dateB = new Date(b.date);
 
-      // Primary Sort: By Date (Newest first)
       if (dateB > dateA) return 1;
       if (dateB < dateA) return -1;
 
-      // Secondary Sort: By order of creation (Newest first)
-      // This ensures items added on the same day stay in exact chronological order
       const timeA = a.createdAt?.seconds || 0;
       const timeB = b.createdAt?.seconds || 0;
       return timeB - timeA;
     });
-  }, [transactions, search, filterType, filterCat, showDeleted, categories, people, accounts, currentMonth]); // Added accounts to dependencies
+  }, [transactions, search, filterType, filterCat, showDeleted, categories, people, accounts, currentMonth]);
 
   return (
     <div>
@@ -1022,14 +1012,19 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
           const acc = accounts?.find(a => a.id === t.accountId);
 
           return (
-            <Card key={t.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", opacity: t.isDeleted ? 0.5 : 1 }}>
+            <Card
+              key={t.id}
+              onClick={!t.isDeleted ? () => onSelectTxn(t) : undefined}
+              style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", opacity: t.isDeleted ? 0.55 : 1 }}
+            >
               <div style={{ fontSize: 26 }}>{cat?.icon || "💳"}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ color: COLORS.text, fontWeight: 600, fontSize: 14 }}>{t.note || cat?.name || "—"}</div>
-                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                   <Tag color={cat?.color || COLORS.accent}>{cat?.name || "—"}</Tag>
                   {acc && <Tag color={acc.color || COLORS.textMuted}>{acc.icon} {acc.name}</Tag>}
                   {person && <Tag color={COLORS.pending}>👤 {person.name}</Tag>}
+                  {t.settledDue && <Tag color={COLORS.income}>✓ Due Settled</Tag>}
                   <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{t.date}</span>
                   {t.isRecurring && <Tag color={COLORS.textMuted}>🔁 Recurring</Tag>}
                 </div>
@@ -1039,23 +1034,128 @@ function Transactions({ transactions, categories, people, accounts, onDelete, on
                   color: t.type === "income" ? COLORS.income : COLORS.expense,
                   fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16
                 }}>{t.type === "income" ? "+" : "-"}{fmt(t.amount)}</div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {!t.isDeleted && (
-                    <>
-                      <button onClick={() => onEdit(t)} style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Edit</button>
-                      <button onClick={() => onDelete(t.id)} style={{ background: COLORS.expenseDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.expense, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Delete</button>
-                    </>
-                  )}
-                  {t.isDeleted && (
-                    <button onClick={() => onRestore(t.id)} style={{ background: COLORS.pendingDim, border: "none", borderRadius: 6, padding: "3px 8px", color: COLORS.warning, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Restore</button>
-                  )}
-                </div>
+                {t.isDeleted && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onRestore(t.id); }}
+                    style={{ background: COLORS.pendingDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.warning, cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                  >
+                    Restore
+                  </button>
+                )}
               </div>
             </Card>
           );
         })}
       </div>
     </div>
+  );
+}
+
+// ─── TRANSACTION DETAIL MODAL ─────────────────────────────────────────────────
+function TransactionDetailModal({ txn, categories, people, accounts, onClose, onEdit, onDelete, onMarkDuePaid }) {
+  if (!txn) return null;
+
+  const cat = categories.find(c => c.id === txn.categoryId);
+  const acc = accounts?.find(a => a.id === txn.accountId);
+  const person = txn.personId ? people.find(p => p.id === txn.personId) : null;
+  const isDueTxn = txn.type === "expense" && txn.spendType === "other" && person;
+
+  const DetailRow = ({ label, value }) => (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "11px 0", borderBottom: `1px solid ${COLORS.border}`
+    }}>
+      <span style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600 }}>{label}</span>
+      <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 600, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <Modal title="📄 Transaction Details" onClose={onClose}>
+      {/* Hero Amount Banner */}
+      <div style={{
+        background: COLORS.bg, borderRadius: 16, padding: "20px 16px",
+        textAlign: "center", border: `1px solid ${COLORS.border}`, marginBottom: 16
+      }}>
+        <div style={{ fontSize: 34, marginBottom: 6 }}>{cat?.icon || "💳"}</div>
+        <div style={{
+          color: txn.type === "income" ? COLORS.income : COLORS.expense,
+          fontWeight: 800, fontSize: 28, fontFamily: "'DM Mono',monospace"
+        }}>
+          {fmt(txn.amount)}
+        </div>
+        <div style={{ color: COLORS.textSub, fontSize: 13, marginTop: 4, fontWeight: 600 }}>
+          {txn.note || cat?.name || "Transaction"}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+          {isDueTxn && (
+            <Tag color={txn.settledDue ? COLORS.income : COLORS.pending}>
+              {txn.settledDue ? "✓ Due Settled" : `⏳ Pending Due (${person.name})`}
+            </Tag>
+          )}
+        </div>
+      </div>
+
+      {/* Clean Non-Redundant Breakdown */}
+      <div style={{ marginBottom: 20 }}>
+        <DetailRow label="Category" value={`${cat?.icon || ""} ${cat?.name || "Uncategorized"}`} />
+        <DetailRow label="Account" value={acc ? `${acc.icon} ${acc.name}` : "—"} />
+        <DetailRow label="Date" value={txn.date} />
+        {txn.subNote && <DetailRow label="Sub-Category" value={txn.subNote} />}
+        {isDueTxn && (
+          <>
+            <DetailRow label="Spend For" value={`${person.name}`} />
+            <DetailRow
+              label={`${person.name}'s Current Due`}
+              value={<span style={{ color: person.balance > 0 ? COLORS.pending : COLORS.income }}>{fmt(person.balance)}</span>}
+            />
+          </>
+        )}
+      </div>
+
+      {/* Mark Due Paid Action (Only for active "For Someone" transactions) */}
+      {isDueTxn && !txn.settledDue && !txn.isDeleted && (
+        <Btn
+          onClick={() => onMarkDuePaid(txn)}
+          color={COLORS.income}
+          style={{ width: "100%", padding: "12px 0", marginBottom: 12 }}
+        >
+          ✓ Mark Due Paid & Move to Trash
+        </Btn>
+      )}
+
+      {/* Edit & Delete Actions */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+        <Btn
+          onClick={() => onEdit(txn)}
+          outline
+          color={COLORS.accent}
+          style={{ flex: 1, padding: "10px 0" }}
+        >
+          ✏️ Edit
+        </Btn>
+        <Btn
+          onClick={() => onDelete(txn.id)}
+          outline
+          color={COLORS.expense}
+          style={{ flex: 1, padding: "10px 0" }}
+        >
+          🗑 Delete
+        </Btn>
+      </div>
+
+      {/* Navigation Back / Close */}
+      <button
+        onClick={onClose}
+        style={{
+          width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+          borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+          fontWeight: 700, fontSize: 13, cursor: "pointer"
+        }}
+      >
+        ← Back to Logs
+      </button>
+    </Modal>
   );
 }
 
@@ -1842,6 +1942,7 @@ export default function PocketLedger() {
   const [liabilities, setLiabilities] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editTxn, setEditTxn] = useState(null);
+  const [selectedTxn, setSelectedTxn] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2172,22 +2273,45 @@ export default function PocketLedger() {
       const { id, ...data } = txnData;
 
       if (id) {
+        const oldTxn = transactions.find(t => t.id === id);
         const txnRef = doc(db, "users", user.uid, "transactions", id);
         await updateDoc(txnRef, { ...data, updatedAt: serverTimestamp() });
+
+        // Adjust person due balance if an active "other" expense was edited
+        if (oldTxn && !oldTxn.settledDue) {
+          if (oldTxn.type === "expense" && oldTxn.spendType === "other" && oldTxn.personId) {
+            const oldPerson = people.find(p => p.id === oldTxn.personId);
+            if (oldPerson) {
+              const newBal = Math.max(0, oldPerson.balance - oldTxn.amount);
+              await updateDoc(doc(db, "users", user.uid, "people", oldTxn.personId), { balance: newBal });
+            }
+          }
+          if (data.type === "expense" && data.spendType === "other" && data.personId) {
+            await updateDoc(doc(db, "users", user.uid, "people", data.personId), { balance: increment(data.amount) });
+          }
+        }
+
+        const updatedObj = { ...data, id, isDeleted: false };
+        setSelectedTxn(updatedObj);
       } else {
-        await addDoc(collection(db, "users", user.uid, "transactions"), {
+        const docRef = await addDoc(collection(db, "users", user.uid, "transactions"), {
           ...data,
           createdAt: serverTimestamp(),
-          isDeleted: false
+          isDeleted: false,
+          settledDue: false,
         });
 
         if (data.type === "expense" && data.spendType === "other" && data.personId) {
           const personRef = doc(db, "users", user.uid, "people", data.personId);
           await updateDoc(personRef, { balance: increment(data.amount) });
         }
+
+        // Open the single transaction detailed view right after entry
+        const createdObj = { ...data, id: docRef.id, isDeleted: false, settledDue: false };
+        setActiveTab("transactions");
+        setSelectedTxn(createdObj);
       }
 
-      // Re-calculate and sync widget
       const updatedTxns = id
         ? transactions.map(t => t.id === id ? { ...data, id, isDeleted: false } : t)
         : [...transactions, { ...data, id: "temp", isDeleted: false }];
@@ -2199,8 +2323,44 @@ export default function PocketLedger() {
     }
   };
 
+  const markTxnDuePaid = async (txn) => {
+    if (!user || !txn) return;
+    try {
+      // 1. Reduce the person's due balance by this transaction's amount
+      if (txn.personId) {
+        const person = people.find(p => p.id === txn.personId);
+        if (person) {
+          const updatedBal = Math.max(0, person.balance - txn.amount);
+          await updateDoc(doc(db, "users", user.uid, "people", txn.personId), {
+            balance: updatedBal,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      // 2. Soft-delete the transaction to Trash & mark as settled
+      const txnRef = doc(db, "users", user.uid, "transactions", txn.id);
+      await updateDoc(txnRef, {
+        isDeleted: true,
+        settledDue: true,
+        deletedAt: serverTimestamp(),
+      });
+
+      // 3. Close detail modal & refresh widget balances
+      setSelectedTxn(null);
+      const updatedTxns = transactions.map(t =>
+        t.id === txn.id ? { ...t, isDeleted: true, settledDue: true } : t
+      );
+      await syncRefreshedBalances(updatedTxns);
+    } catch (error) {
+      console.error("Mark Txn Due Paid Error:", error);
+    }
+  };
+
   const deleteTransaction = (id) => {
     if (!user) return;
+    const targetTxn = transactions.find(t => t.id === id);
+
     setConfirmDialog({
       title: "Delete Transaction",
       message: "Are you sure you want to delete this transaction? It will be moved to the trash.",
@@ -2209,10 +2369,21 @@ export default function PocketLedger() {
           const txnRef = doc(db, "users", user.uid, "transactions", id);
           await updateDoc(txnRef, { isDeleted: true, deletedAt: serverTimestamp() });
 
-          // ─── SYNC WIDGET AFTER DELETION ───
+          // If it was an unsettled due transaction, also deduct from the person's due balance
+          if (targetTxn && targetTxn.type === "expense" && targetTxn.spendType === "other" && targetTxn.personId && !targetTxn.settledDue) {
+            const person = people.find(p => p.id === targetTxn.personId);
+            if (person) {
+              const updatedBal = Math.max(0, person.balance - targetTxn.amount);
+              await updateDoc(doc(db, "users", user.uid, "people", targetTxn.personId), {
+                balance: updatedBal,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+
+          setSelectedTxn(null);
           const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: true } : t);
           syncRefreshedBalances(updatedTxns);
-          // ───────────────────────────────────
         } catch (error) {
           console.error("Delete Error:", error);
         }
@@ -2223,14 +2394,22 @@ export default function PocketLedger() {
 
   const restoreTransaction = async (id) => {
     if (!user) return;
+    const targetTxn = transactions.find(t => t.id === id);
+
     try {
       const txnRef = doc(db, "users", user.uid, "transactions", id);
-      await updateDoc(txnRef, { isDeleted: false });
+      await updateDoc(txnRef, { isDeleted: false, settledDue: false });
 
-      // ─── SYNC WIDGET AFTER RESTORATION ───
-      const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: false } : t);
+      // Re-add to person's due balance if it was a "For Someone" transaction
+      if (targetTxn && targetTxn.type === "expense" && targetTxn.spendType === "other" && targetTxn.personId) {
+        await updateDoc(doc(db, "users", user.uid, "people", targetTxn.personId), {
+          balance: increment(targetTxn.amount),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      const updatedTxns = transactions.map(t => t.id === id ? { ...t, isDeleted: false, settledDue: false } : t);
       syncRefreshedBalances(updatedTxns);
-      // ─────────────────────────────────────
     } catch (error) {
       console.error("Restore Error:", error);
     }
@@ -2302,13 +2481,19 @@ export default function PocketLedger() {
   const renderScreen = () => {
     switch (activeTab) {
       case "dashboard": return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
-      case "transactions": return <Transactions transactions={transactions} categories={categories} people={people}
-        onDelete={deleteTransaction}
-        onRestore={restoreTransaction}
-        onEdit={t => { setEditTxn(t); setShowAddModal(true); }}
-        accounts={accounts}
-        currentMonth={currentMonth}
-        onMonthChange={setCurrentMonth} />;
+      case "transactions":
+        return (
+          <Transactions
+            transactions={transactions}
+            categories={categories}
+            people={people}
+            onSelectTxn={t => setSelectedTxn(t)}
+            onRestore={restoreTransaction}
+            accounts={accounts}
+            currentMonth={currentMonth}
+            onMonthChange={setCurrentMonth}
+          />
+        );
       case "dues":
         return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
       case "balances":
@@ -2655,6 +2840,22 @@ export default function PocketLedger() {
             onClose={() => { setShowAddModal(false); setEditTxn(null); }}
           />
         </Modal>
+      )}
+      {selectedTxn && (
+        <TransactionDetailModal
+          txn={selectedTxn}
+          categories={categories}
+          people={people}
+          accounts={accounts}
+          onClose={() => setSelectedTxn(null)}
+          onEdit={(t) => {
+            setSelectedTxn(null);
+            setEditTxn(t);
+            setShowAddModal(true);
+          }}
+          onDelete={deleteTransaction}
+          onMarkDuePaid={markTxnDuePaid}
+        />
       )}
       {confirmDialog && (
         <ConfirmModal
