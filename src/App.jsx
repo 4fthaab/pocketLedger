@@ -1159,67 +1159,185 @@ function TransactionDetailModal({ txn, categories, people, accounts, onClose, on
   );
 }
 
-// ─── DUES ─────────────────────────────────────────────────────────────────────
-function Dues({ people, onMarkPaid, onAddPerson }) {
-  const lend = people.filter(p => p.type === "lend" && p.balance > 0);
-  const owe = people.filter(p => p.type === "owe" && p.balance > 0);
-  const [showAdd, setShowAdd] = useState(false);
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [dueType, setDueType] = useState("lend");
-
-  const handleAdd = () => {
-    if (!name || !amount) return;
-    onAddPerson({ name, balance: +amount, type: dueType });
-    setName(""); setAmount(""); setShowAdd(false);
-  };
-
-  const PersonCard = ({ p }) => (
-    <Card key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}>
-      <div style={{
-        width: 40, height: 40, borderRadius: 20, background: p.type === "lend" ? COLORS.accentDim : COLORS.expenseDim,
-        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
-      }}>
-        {p.type === "lend" ? "👤" : "👤"}
+// ─── ANALYSIS SCREEN (PLACEHOLDER) ────────────────────────────────────────────
+function AnalysisScreen() {
+  return (
+    <div>
+      <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text, marginBottom: 16 }}>
+        📈 Analysis
       </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{p.name}</div>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 2 }}>
-          {p.type === "lend" ? "Owes you" : "You owe"}
+      <Card style={{ textAlign: "center", padding: "48px 20px" }}>
+        <div style={{ fontSize: 36, marginBottom: 12 }}>📊</div>
+        <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 6 }}>
+          Financial Analysis Coming Soon
         </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-        <div style={{ color: p.type === "lend" ? COLORS.income : COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>{fmt(p.balance)}</div>
-        <button onClick={() => onMarkPaid(p.id)}
-          style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
-          ✓ Settled
-        </button>
-      </div>
-    </Card>
+        <div style={{ color: COLORS.textMuted, fontSize: 13 }}>
+          We'll build deep spending insights, category trends, and monthly comparisons here next.
+        </div>
+      </Card>
+    </div>
   );
+}
+
+// ─── DUES (RECEIVABLES & TRANSACTION BREAKDOWN) ───────────────────────────────
+function Dues({ people, transactions, categories, accounts, onSelectTxn, onSettlePerson }) {
+  const lend = people.filter(p => p.type === "lend" && p.balance > 0);
+  const [selectedPersonId, setSelectedPersonId] = useState(null);
+
+  const selectedPerson = people.find(p => p.id === selectedPersonId) || null;
+
+  // All active, unsettled transactions linked to the selected person
+  const personTxns = useMemo(() => {
+    if (!selectedPerson) return [];
+    return transactions
+      .filter(t => !t.isDeleted && !t.settledDue && t.personId === selectedPerson.id)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [transactions, selectedPerson]);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 18, color: COLORS.text }}>🤝 Dues</div>
-        {/* <Btn onClick={() => setShowAdd(true)} style={{ padding: "8px 16px", fontSize: 12 }}>+ Add</Btn> */}
+        <div style={{ fontWeight: 800, fontSize: 20, color: COLORS.text }}>🤝 Dues (To Receive)</div>
       </div>
 
-      <div style={{ marginBottom: 8, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
         💰 Money To Receive — {fmt(lend.reduce((s, p) => s + p.balance, 0))} total
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-        {lend.length === 0 ? <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "16px 0" }}>No pending receivables 🎉</div>
-          : lend.map(p => <PersonCard key={p.id} p={p} />)}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {lend.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "24px 0", textAlign: "center" }}>
+            No pending receivables 🎉
+          </div>
+        ) : (
+          lend.map(p => {
+            const count = transactions.filter(t => !t.isDeleted && !t.settledDue && t.personId === p.id).length;
+            return (
+              <Card
+                key={p.id}
+                onClick={() => setSelectedPersonId(p.id)}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}
+              >
+                <div style={{
+                  width: 42, height: 42, borderRadius: 21, background: COLORS.accentDim,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
+                }}>
+                  👤
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                  <div style={{ color: COLORS.textMuted, fontSize: 12, marginTop: 2 }}>
+                    {count > 0 ? `${count} pending transaction${count > 1 ? "s" : ""} • Tap to view` : "Owes you • Tap to settle"}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ color: COLORS.income, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>
+                    {fmt(p.balance)}
+                  </div>
+                  <div style={{ color: COLORS.accent, fontSize: 11, fontWeight: 600, marginTop: 2 }}>
+                    Details →
+                  </div>
+                </div>
+              </Card>
+            );
+          })
+        )}
       </div>
 
-      <div style={{ marginBottom: 8, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-        💸 Money I Owe — {fmt(owe.reduce((s, p) => s + p.balance, 0))} total
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {owe.length === 0 ? <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "16px 0" }}>You're debt free! 🎉</div>
-          : owe.map(p => <PersonCard key={p.id} p={p} />)}
-      </div>
+      {/* PERSON DUE BREAKDOWN MODAL */}
+      {selectedPerson && (
+        <Modal
+          title={`👤 ${selectedPerson.name}'s Dues`}
+          onClose={() => setSelectedPersonId(null)}
+        >
+          {/* Total Summary Banner */}
+          <div style={{
+            background: COLORS.bg, borderRadius: 14, padding: "16px",
+            border: `1px solid ${COLORS.border}`, textAlign: "center", marginBottom: 16
+          }}>
+            <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Total Pending Receivable
+            </div>
+            <div style={{ color: COLORS.income, fontWeight: 800, fontSize: 26, fontFamily: "'DM Mono',monospace", marginTop: 4 }}>
+              {fmt(selectedPerson.balance)}
+            </div>
+          </div>
+
+          {/* Transaction List that built up this due */}
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            Transactions Making Up This Due ({personTxns.length})
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18, maxHeight: 280, overflowY: "auto" }}>
+            {personTxns.length === 0 ? (
+              <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: "16px 0" }}>
+                No individual transaction logs linked to this balance.
+              </div>
+            ) : (
+              personTxns.map(t => {
+                const cat = categories.find(c => c.id === t.categoryId);
+                const acc = accounts?.find(a => a.id === t.accountId);
+                return (
+                  <div
+                    key={t.id}
+                    onClick={() => onSelectTxn(t)}
+                    style={{
+                      background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                      borderRadius: 12, padding: "12px 14px", display: "flex",
+                      alignItems: "center", gap: 12, cursor: "pointer"
+                    }}
+                  >
+                    <div style={{ fontSize: 22 }}>{cat?.icon || "💳"}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>
+                        {t.note || cat?.name || "Expense"}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ color: COLORS.textMuted, fontSize: 11 }}>{t.date}</span>
+                        {acc && <Tag color={acc.color || COLORS.textMuted}>{acc.name}</Tag>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ color: COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 14 }}>
+                        {fmt(t.amount)}
+                      </div>
+                      <div style={{ color: COLORS.accent, fontSize: 10, fontWeight: 600, marginTop: 2 }}>
+                        Open →
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Complete Settlement Action */}
+          {selectedPerson.balance > 0 && (
+            <Btn
+              onClick={async () => {
+                await onSettlePerson(selectedPerson.id);
+                setSelectedPersonId(null);
+              }}
+              color={COLORS.income}
+              style={{ width: "100%", padding: "12px 0", marginBottom: 10 }}
+            >
+              ✓ Complete Due Settlement ({fmt(selectedPerson.balance)})
+            </Btn>
+          )}
+
+          {/* Close / Back Button */}
+          <button
+            onClick={() => setSelectedPersonId(null)}
+            style={{
+              width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+              borderRadius: 10, padding: "10px 0", color: COLORS.textSub,
+              fontWeight: 700, fontSize: 13, cursor: "pointer"
+            }}
+          >
+            ← Back to Dues
+          </button>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1285,64 +1403,98 @@ function BalancesScreen({ accounts, transactions, currentMonth, onMonthChange })
   );
 }
 
-// ─── GOALS & LIABILITIES (UPDATED) ───────────────────────────────────────────
-function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal, onDeleteGoal, onAddLiability, onUpdateLiability, onDeleteLiability }) {
-  const [showAddGoal, setShowAddGoal] = useState(false);
+// ─── LIABILITIES (SINGLE PAYMENT DUES & EMI LOANS) ───────────────────────────
+function LiabilitiesScreen({ liabilities, people, onAddPerson, onMarkPersonPaid, onAddLiability, onDeleteLiability }) {
   const [showAddLiab, setShowAddLiab] = useState(false);
-  const [editingItem, setEditingItem] = useState(null); // Tracks if we are editing
+  const [editingItem, setEditingItem] = useState(null);
 
-  // Goal Form State
-  const [gName, setGName] = useState("");
-  const [gTarget, setGTarget] = useState("");
-  const [gIcon, setGIcon] = useState("🎯");
-  const [addSavings, setAddSavings] = useState({});
+  // Liability Entry Mode: "single" (Single Payment Due) | "emi" (EMI Loan)
+  const [liabType, setLiabType] = useState("single");
 
-  // Liability Form State
+  // Single Payment Form State
+  const [personId, setPersonId] = useState("");
+  const [newPersonName, setNewPersonName] = useState("");
+  const [singleAmount, setSingleAmount] = useState("");
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().split("T")[0]);
+  const [singleDueDate, setSingleDueDate] = useState("");
+  const [singleNote, setSingleNote] = useState("");
+
+  // EMI Form State (Preserved from v2.1)
   const [lName, setLName] = useState("");
   const [lTotal, setLTotal] = useState("");
   const [lPaid, setLPaid] = useState("");
   const [lDue, setLDue] = useState("");
   const [lEmi, setLEmi] = useState("");
 
+  const owePeople = people.filter(p => p.type === "owe" && p.balance > 0);
+  const totalSingleOwe = owePeople.reduce((s, p) => s + p.balance, 0);
+  const totalEmiRem = liabilities.reduce((s, l) => s + (l.totalAmount - l.paidAmount), 0);
+
   useEffect(() => {
     if (lTotal && lDue) {
       const remaining = (+lTotal) - (+lPaid || 0);
       const today = new Date();
       const dueDate = new Date(lDue);
-
-      // Calculate month difference
       const months = (dueDate.getFullYear() - today.getFullYear()) * 12 + (dueDate.getMonth() - today.getMonth());
 
       if (months > 0) {
         setLEmi(Math.round(remaining / months));
       } else {
-        setLEmi(remaining); // Due this month or overdue
+        setLEmi(remaining);
       }
     }
   }, [lTotal, lPaid, lDue]);
 
-  const handleAddGoal = () => {
-    if (!gName.trim() || !gTarget || gTarget <= 0) {
-      alert("Please enter a valid name and target amount.");
-      return;
-    }
-    onAddGoal({
-      id: editingItem?.id || uid(),
-      name: gName,
-      targetAmount: +gTarget,
-      savedAmount: editingItem?.savedAmount || 0,
-      icon: gIcon,
-      color: PIE_COLORS[goals.length % PIE_COLORS.length]
-    });
-    resetGoalForm();
+  const resetForm = () => {
+    setLiabType("single");
+    setPersonId("");
+    setNewPersonName("");
+    setSingleAmount("");
+    setEntryDate(new Date().toISOString().split("T")[0]);
+    setSingleDueDate("");
+    setSingleNote("");
+    setLName("");
+    setLTotal("");
+    setLPaid("");
+    setLDue("");
+    setLEmi("");
+    setShowAddLiab(false);
+    setEditingItem(null);
   };
 
-  const handleAddLiability = () => {
-    if (!lName.trim() || !lTotal || lTotal <= 0) {
-      alert("Please enter a valid name and total amount.");
+  const handleSaveLiability = async () => {
+    if (liabType === "single") {
+      if (!singleAmount || +singleAmount <= 0) {
+        alert("Please enter a valid amount.");
+        return;
+      }
+      if (!personId || (personId === "NEW" && !newPersonName.trim())) {
+        alert("Please select or enter a person's name.");
+        return;
+      }
+
+      const selectedExisting = people.find(p => p.id === personId);
+      const resolvedName = personId === "NEW" ? newPersonName.trim() : selectedExisting?.name;
+
+      await onAddPerson({
+        name: resolvedName,
+        balance: +singleAmount,
+        type: "owe",
+        entryDate,
+        dueDate: singleDueDate || "",
+        note: singleNote.trim()
+      });
+
+      resetForm();
       return;
     }
-    onAddLiability({
+
+    // EMI Type
+    if (!lName.trim() || !lTotal || +lTotal <= 0) {
+      alert("Please enter a valid lender name and total amount.");
+      return;
+    }
+    await onAddLiability({
       id: editingItem?.id || uid(),
       name: lName,
       totalAmount: +lTotal,
@@ -1350,163 +1502,213 @@ function GoalsScreen({ goals, liabilities, onAddGoal, onUpdateGoal, onDeleteGoal
       dueDate: lDue || "N/A",
       emi: +lEmi || 0
     });
-    resetLiabForm();
-  };
-
-  const resetGoalForm = () => {
-    setGName(""); setGTarget(""); setGIcon("🎯"); setShowAddGoal(false); setEditingItem(null);
-  };
-
-  const resetLiabForm = () => {
-    setLName(""); setLTotal(""); setLPaid(""); setLDue(""); setLEmi(""); setShowAddLiab(false); setEditingItem(null);
-  };
-
-  const startEditGoal = (g) => {
-    setEditingItem(g); setGName(g.name); setGTarget(g.targetAmount); setGIcon(g.icon); setShowAddGoal(true);
+    resetForm();
   };
 
   const startEditLiab = (l) => {
-    setEditingItem(l); setLName(l.name); setLTotal(l.totalAmount); setLPaid(l.paidAmount); setLDue(l.dueDate); setLEmi(l.emi); setShowAddLiab(true);
+    setEditingItem(l);
+    setLiabType("emi");
+    setLName(l.name);
+    setLTotal(l.totalAmount);
+    setLPaid(l.paidAmount);
+    setLDue(l.dueDate);
+    setLEmi(l.emi);
+    setShowAddLiab(true);
   };
 
   return (
     <div>
-      <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text, marginBottom: 16 }}>🎯 Goals & Liabilities</div>
-
-      {/* --- SAVING GOALS SECTION --- */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Saving Goals</div>
-        <Btn onClick={() => setShowAddGoal(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Goal</Btn>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 22, color: COLORS.text }}>🏦 Liabilities</div>
+        <Btn onClick={() => { resetForm(); setShowAddLiab(true); }} style={{ padding: "8px 14px", fontSize: 12 }}>
+          + Add Liability
+        </Btn>
       </div>
 
-      {showAddGoal && (
-        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.accent}44` }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.accent }}>{editingItem ? "Edit Goal" : "New Saving Goal"}</div>
-          <Input label="Goal Name *" value={gName} onChange={setGName} placeholder="e.g. New Car" />
-          <Input label="Target Amount (₹) *" value={gTarget} onChange={setGTarget} type="number" placeholder="0" />
-          <Input label="Icon (emoji)" value={gIcon} onChange={setGIcon} placeholder="🎯" />
+      {/* Total Summary Banner */}
+      <Card style={{ marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Total Payables & Loans
+          </div>
+          <div style={{ color: COLORS.expense, fontWeight: 800, fontSize: 22, fontFamily: "'DM Mono',monospace", marginTop: 4 }}>
+            {fmt(totalSingleOwe + totalEmiRem)}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 11, color: COLORS.textSub }}>
+          <div>Dues I Owe: <strong style={{ color: COLORS.text }}>{fmt(totalSingleOwe)}</strong></div>
+          <div style={{ marginTop: 2 }}>EMI Loans: <strong style={{ color: COLORS.text }}>{fmt(totalEmiRem)}</strong></div>
+        </div>
+      </Card>
+
+      {/* ADD / EDIT LIABILITY FORM */}
+      {showAddLiab && (
+        <Card style={{ marginBottom: 18, border: `1px solid ${COLORS.expense}44` }}>
+          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.expense }}>
+            {editingItem ? "Edit EMI Liability" : "New Liability"}
+          </div>
+
+          {!editingItem && (
+            <Toggle
+              value={liabType}
+              onChange={setLiabType}
+              options={[
+                { value: "single", label: "👤 Single Payment", color: COLORS.pending },
+                { value: "emi", label: "🏦 EMI Type", color: COLORS.expense }
+              ]}
+            />
+          )}
+
+          {liabType === "single" ? (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                  Person *
+                </div>
+                <select
+                  value={personId}
+                  onChange={e => setPersonId(e.target.value)}
+                  style={{
+                    width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.border}`,
+                    borderRadius: 10, padding: "10px 14px", color: COLORS.text,
+                    fontSize: 14, outline: "none", marginBottom: personId === "NEW" ? 8 : 0
+                  }}
+                >
+                  <option value="">Select person...</option>
+                  {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <option value="NEW">+ Type New Person</option>
+                </select>
+
+                {personId === "NEW" && (
+                  <Input
+                    placeholder="Enter person's name..."
+                    value={newPersonName}
+                    onChange={setNewPersonName}
+                  />
+                )}
+              </div>
+
+              <Input label="Amount (₹) *" value={singleAmount} onChange={setSingleAmount} type="number" placeholder="0" />
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Entry Date" value={entryDate} onChange={setEntryDate} type="date" />
+                <Input label="Due On" value={singleDueDate} onChange={setSingleDueDate} type="date" />
+              </div>
+
+              <Input label="Note" value={singleNote} onChange={setSingleNote} placeholder="e.g., Borrowed for fuel, split dinner..." />
+            </>
+          ) : (
+            <>
+              <Input label="Lender Name *" value={lName} onChange={setLName} placeholder="e.g. Home Loan" />
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Total Amount *" value={lTotal} onChange={setLTotal} type="number" placeholder="0" />
+                <Input label="Already Paid" value={lPaid} onChange={setLPaid} type="number" placeholder="0" />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Input label="Final Due Date *" value={lDue} onChange={setLDue} type="date" />
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>
+                    Auto-calculated EMI
+                  </div>
+                  <div style={{
+                    background: COLORS.bg, padding: "10px 14px", borderRadius: 10,
+                    color: COLORS.accent, fontWeight: 700, border: `1px solid ${COLORS.border}`
+                  }}>
+                    {fmt(lEmi)}/mo
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAddGoal} style={{ flex: 1 }}>{editingItem ? "Update" : "Add Goal"}</Btn>
-            <Btn onClick={resetGoalForm} outline style={{ flex: 1 }}>Cancel</Btn>
+            <Btn onClick={handleSaveLiability} color={COLORS.expense} style={{ flex: 1, color: "#fff" }}>
+              {editingItem ? "Update Liability" : "Save Liability"}
+            </Btn>
+            <Btn onClick={resetForm} outline style={{ flex: 1 }}>Cancel</Btn>
           </div>
         </Card>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-        {goals.map(g => (
-          <Card key={g.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 22 }}>{g.icon}</span>
-                <span style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{g.name}</span>
+      {/* --- SECTION 1: SINGLE PAYMENT DUES (MONEY I OWE) --- */}
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        💸 Single Payment Dues (Money I Owe) — {fmt(totalSingleOwe)}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+        {owePeople.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "12px 0" }}>No single payment dues 🎉</div>
+        ) : (
+          owePeople.map(p => (
+            <Card key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px" }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: 20, background: COLORS.expenseDim,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18
+              }}>
+                👤
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => startEditGoal(g)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
-                <button onClick={() => onDeleteGoal(g.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>{p.name}</div>
+                {p.note && <div style={{ color: COLORS.textSub, fontSize: 12, marginTop: 2 }}>{p.note}</div>}
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  {p.entryDate && <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Added: {p.entryDate}</span>}
+                  {p.dueDate && <Tag color={COLORS.expense}>Due: {p.dueDate}</Tag>}
+                </div>
               </div>
-            </div>
-
-            <ProgressBar value={g.savedAmount} max={g.targetAmount} color={g.color} height={10} />
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-              <span style={{ color: COLORS.textMuted, fontSize: 12 }}>{fmt(g.savedAmount)} / {fmt(g.targetAmount)} ({Math.round((g.savedAmount / g.targetAmount) * 100)}%)</span>
-
-              {/* LARGER ADD MONEY UI */}
-              <div style={{ display: "flex", gap: 6, flex: "1 1 150px", justifyContent: "flex-end" }}>
-                <input
-                  type="number"
-                  placeholder="+ amount"
-                  value={addSavings[g.id] || ""}
-                  onChange={e => setAddSavings(s => ({ ...s, [g.id]: e.target.value }))}
-                  style={{
-                    flex: 1, maxWidth: 100, background: COLORS.bg, border: `1px solid ${COLORS.border}`,
-                    borderRadius: 10, padding: "8px 12px", color: COLORS.text, fontSize: 14, outline: "none"
-                  }}
-                />
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                <div style={{ color: COLORS.expense, fontWeight: 800, fontFamily: "'DM Mono',monospace", fontSize: 16 }}>
+                  {fmt(p.balance)}
+                </div>
                 <button
-                  onClick={() => {
-                    if (!addSavings[g.id]) return;
-                    onUpdateGoal(g.id, Math.min(g.targetAmount, g.savedAmount + +addSavings[g.id]));
-                    setAddSavings(s => ({ ...s, [g.id]: "" }));
-                  }}
-                  style={{ background: COLORS.accent, border: "none", borderRadius: 10, padding: "8px 16px", color: "#000", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-                  Add
+                  onClick={() => onMarkPersonPaid(p.id)}
+                  style={{ background: COLORS.accentDim, border: "none", borderRadius: 6, padding: "4px 10px", color: COLORS.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                >
+                  ✓ Settled
                 </button>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          ))
+        )}
       </div>
 
-      {/* --- LIABILITIES SECTION --- */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Liabilities (Loans/EMI)</div>
-        <Btn onClick={() => setShowAddLiab(true)} style={{ padding: "5px 12px", fontSize: 11 }}>+ Debt</Btn>
+      {/* --- SECTION 2: EMI LOANS --- */}
+      <div style={{ marginBottom: 10, color: COLORS.textMuted, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        🏦 EMI Loans — {fmt(totalEmiRem)} remaining
       </div>
-
-      {showAddLiab && (
-        <Card style={{ marginBottom: 16, border: `1px solid ${COLORS.expense}44` }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, color: COLORS.expense }}>
-            {editingItem ? "Edit Liability" : "New Liability"}
-          </div>
-          <Input label="Lender Name *" value={lName} onChange={setLName} placeholder="e.g. Home Loan" />
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="Total Amount *" value={lTotal} onChange={setLTotal} type="number" placeholder="0" />
-            <Input label="Already Paid" value={lPaid} onChange={setLPaid} type="number" placeholder="0" />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="Final Due Date *" value={lDue} onChange={setLDue} type="date" />
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ color: COLORS.textMuted, fontSize: 11, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>
-                Auto-calculated EMI
-              </div>
-              <div style={{
-                background: COLORS.bg, padding: "10px 14px", borderRadius: 10,
-                color: COLORS.accent, fontWeight: 700, border: `1px solid ${COLORS.border}`
-              }}>
-                {fmt(lEmi)}/mo
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={handleAddLiability} color={COLORS.expense} style={{ flex: 1, color: "#fff" }}>
-              {editingItem ? "Update Liability" : "Add Liability"}
-            </Btn>
-            <Btn onClick={resetLiabForm} outline style={{ flex: 1 }}>Cancel</Btn>
-          </div>
-        </Card>
-      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {liabilities.map(l => (
-          <Card key={l.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>🏦 {l.name}</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Tag color={COLORS.expense}>Due: {l.dueDate}</Tag>
-                <button onClick={() => startEditLiab(l)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
-                <button onClick={() => onDeleteLiability(l.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+        {liabilities.length === 0 ? (
+          <div style={{ color: COLORS.textMuted, fontSize: 13, padding: "12px 0" }}>No active EMI loans</div>
+        ) : (
+          liabilities.map(l => (
+            <Card key={l.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>🏦 {l.name}</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Tag color={COLORS.expense}>Due: {l.dueDate}</Tag>
+                  <button onClick={() => startEditLiab(l)} style={{ background: "none", border: "none", color: COLORS.textMuted, cursor: "pointer", fontSize: 14 }}>✏️</button>
+                  <button onClick={() => onDeleteLiability(l.id)} style={{ background: "none", border: "none", color: COLORS.expense, cursor: "pointer", fontSize: 14 }}>🗑️</button>
+                </div>
               </div>
-            </div>
 
-            <ProgressBar value={l.paidAmount} max={l.totalAmount} color={COLORS.warning} height={10} />
+              <ProgressBar value={l.paidAmount} max={l.totalAmount} color={COLORS.warning} height={10} />
 
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
-              <span style={{ color: COLORS.textMuted }}>Paid: {fmt(l.paidAmount)}</span>
-              <span style={{ color: COLORS.expense, fontWeight: 700 }}>Rem: {fmt(l.totalAmount - l.paidAmount)}</span>
-            </div>
-
-            {l.emi > 0 && (
-              <div style={{ marginTop: 8, padding: "8px 12px", background: COLORS.bg, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Monthly EMI:</span>
-                <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{fmt(l.emi)}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
+                <span style={{ color: COLORS.textMuted }}>Paid: {fmt(l.paidAmount)}</span>
+                <span style={{ color: COLORS.expense, fontWeight: 700 }}>Rem: {fmt(l.totalAmount - l.paidAmount)}</span>
               </div>
-            )}
-          </Card>
-        ))}
+
+              {l.emi > 0 && (
+                <div style={{ marginTop: 8, padding: "8px 12px", background: COLORS.bg, borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: 11 }}>Monthly EMI:</span>
+                  <span style={{ color: COLORS.text, fontWeight: 600, fontSize: 13 }}>{fmt(l.emi)}</span>
+                </div>
+              )}
+            </Card>
+          ))
+        )}
       </div>
     </div>
   );
@@ -2184,7 +2386,6 @@ export default function PocketLedger() {
     if (!user) return null;
 
     try {
-      // Fixed: Duplicate entry protection based on name
       const existing = people.find(p => p.name.toLowerCase() === personData.name.toLowerCase());
 
       if (existing) {
@@ -2206,6 +2407,9 @@ export default function PocketLedger() {
         await updateDoc(ref, {
           balance: newBalance,
           type: newType,
+          ...(personData.entryDate !== undefined && { entryDate: personData.entryDate }),
+          ...(personData.dueDate !== undefined && { dueDate: personData.dueDate }),
+          ...(personData.note !== undefined && { note: personData.note }),
           updatedAt: serverTimestamp()
         });
         return existing.id;
@@ -2214,6 +2418,9 @@ export default function PocketLedger() {
           name: personData.name,
           balance: personData.balance,
           type: personData.type,
+          ...(personData.entryDate && { entryDate: personData.entryDate }),
+          ...(personData.dueDate && { dueDate: personData.dueDate }),
+          ...(personData.note && { note: personData.note }),
           createdAt: serverTimestamp(),
         });
         return docRef.id;
@@ -2428,6 +2635,44 @@ export default function PocketLedger() {
     }
   };
 
+  const settlePersonDues = async (id) => {
+    if (!user) return;
+    try {
+      // 1. Zero out the person's receivable balance
+      const ref = doc(db, "users", user.uid, "people", id);
+      await updateDoc(ref, {
+        balance: 0,
+        updatedAt: serverTimestamp(),
+      });
+
+      // 2. Mark all active due transactions for this person as paid & soft-delete to Trash
+      const personTxns = transactions.filter(
+        t => !t.isDeleted && !t.settledDue && t.personId === id
+      );
+
+      if (personTxns.length > 0) {
+        await Promise.all(
+          personTxns.map(t =>
+            updateDoc(doc(db, "users", user.uid, "transactions", t.id), {
+              isDeleted: true,
+              settledDue: true,
+              deletedAt: serverTimestamp(),
+            })
+          )
+        );
+
+        // 3. Refresh widget balances
+        const settledIds = new Set(personTxns.map(t => t.id));
+        const updatedTxns = transactions.map(t =>
+          settledIds.has(t.id) ? { ...t, isDeleted: true, settledDue: true } : t
+        );
+        await syncRefreshedBalances(updatedTxns);
+      }
+    } catch (error) {
+      console.error("Settle Person Dues Error:", error);
+    }
+  };
+
   // ─── FIREBASE-BACKED CATEGORY ACTIONS ───
 
   const saveCategory = async (catData) => {
@@ -2464,7 +2709,7 @@ export default function PocketLedger() {
     { id: "dashboard", label: "Home", icon: "🏠" },
     { id: "transactions", label: "Logs", icon: "📋" },
     { id: "add", label: "Add", icon: "➕" },
-    { id: "dues", label: "Dues", icon: "🤝" },
+    { id: "analysis", label: "Analysis", icon: "📈" },
     { id: "balances", label: "Balances", icon: "💳" },
   ];
 
@@ -2472,40 +2717,46 @@ export default function PocketLedger() {
     { id: "dashboard", icon: "🏠", label: "Dashboard" },
     { id: "transactions", icon: "📋", label: "Transactions" },
     { id: "dues", icon: "🤝", label: "Dues" },
+    { id: "liabilities", icon: "🏦", label: "Liabilities" },
+    { id: "analysis", icon: "📈", label: "Analysis" },
     { id: "balances", icon: "💳", label: "Balances" },
     { id: "sheet", icon: "📊", label: "Excel Sheet" },
-    { id: "goals", icon: "🎯", label: "Goals" },
     { id: "categories", icon: "⚙️", label: "Categories" },
   ];
 
   const renderScreen = () => {
     switch (activeTab) {
-      case "dashboard": return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
+      case "dashboard":
+        return <Dashboard transactions={transactions} categories={categories} people={people} goals={goals} liabilities={liabilities} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
       case "transactions":
+        return <Transactions transactions={transactions} categories={categories} people={people}
+          onSelectTxn={t => setSelectedTxn(t)}
+          onRestore={restoreTransaction}
+          accounts={accounts}
+          currentMonth={currentMonth}
+          onMonthChange={setCurrentMonth} />;
+      case "analysis":
+        return <AnalysisScreen />;
+      case "dues":
         return (
-          <Transactions
+          <Dues
+            people={people}
             transactions={transactions}
             categories={categories}
-            people={people}
-            onSelectTxn={t => setSelectedTxn(t)}
-            onRestore={restoreTransaction}
             accounts={accounts}
-            currentMonth={currentMonth}
-            onMonthChange={setCurrentMonth}
+            onSelectTxn={t => setSelectedTxn(t)}
+            onSettlePerson={settlePersonDues}
           />
         );
-      case "dues":
-        return <Dues people={people} onMarkPaid={markPersonPaid} onAddPerson={addPerson} />;
       case "balances":
         return <BalancesScreen accounts={accounts} transactions={transactions} currentMonth={currentMonth} onMonthChange={setCurrentMonth} />;
-      case "goals":
+      case "liabilities":
         return (
-          <GoalsScreen
-            goals={goals}
+          <LiabilitiesScreen
             liabilities={liabilities}
-            onAddGoal={saveGoal}
-            onUpdateGoal={(id, saved) => saveGoal({ id, savedAmount: saved })}
-            onDeleteGoal={deleteGoal}
+            people={people}
+            onAddPerson={addPerson}
+            onMarkPersonPaid={markPersonPaid}
             onAddLiability={saveLiability}
             onDeleteLiability={deleteLiability}
           />
@@ -2526,7 +2777,8 @@ export default function PocketLedger() {
           currentMonth={currentMonth}
           onMonthChange={setCurrentMonth}
         />;
-      default: return null;
+      default:
+        return null;
     }
   };
 
